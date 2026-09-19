@@ -11,5 +11,25 @@ ExecStop=/bin/rm /run/tvheadend.pid
 Restart=always
 RestartSec=5
 
+# Sandboxing. tvheadend serves an HTTP UI/API on the network and drops to
+# the 'osmc' user, which holds passwordless sudo - NoNewPrivileges severs
+# that escalation path. Dropping privileges via setuid() from root is still
+# permitted under NoNewPrivileges; only *gaining* privileges by executing
+# setuid binaries is blocked, so -u/-g continue to work.
+#
+# PrivateDevices and an empty CapabilityBoundingSet are deliberately NOT
+# set: tvheadend needs DVB adapters under /dev/dvb, and starts as root in
+# order to drop privileges itself. ProtectSystem is 'true' rather than
+# 'full' because some tvheadend configurations write under /etc.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
 [Install]
 WantedBy=multi-user.target
