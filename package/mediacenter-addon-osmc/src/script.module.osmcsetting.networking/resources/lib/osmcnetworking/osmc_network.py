@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from io import open
 
@@ -411,49 +412,62 @@ def get_wifi_networks():
 def wifi_connect(path, password=None, ssid=None, script_base_path=None):
     agent_needed = False
     process = None
-    if password or ssid:
-        agent_needed = True
-        print('Starting Wireless Agent')
-        with open('/tmp/preseed_data', 'w', encoding='utf-8') as key_file:
-            if password:
-                print('Setting password')
-                key_file.write(password)
+    preseed_path = None
+    try:
+        if password or ssid:
+            agent_needed = True
+            print('Starting Wireless Agent')
 
-            key_file.write('\n')
+            # Use a private, unpredictable file (0600, not a fixed name in the
+            # shared /tmp namespace) so the passphrase isn't briefly readable
+            # by any other local process while the connection is negotiated.
+            fd, preseed_path = tempfile.mkstemp(prefix='osmc-wifi-', suffix='.tmp')
+            with os.fdopen(fd, 'w', encoding='utf-8') as key_file:
+                if password:
+                    print('Setting password')
+                    key_file.write(password)
 
-            if ssid:
-                print('Setting SSID')
-                key_file.write(ssid)
+                key_file.write('\n')
 
-        agent_script = script_base_path + WIRELESS_AGENT
-        process = subprocess.Popen([sys.executable, agent_script, 'fromfile'])
+                if ssid:
+                    print('Setting SSID')
+                    key_file.write(ssid)
 
-    print('Attempting connection to ' + path)
-    service = connman.get_service_interface(path)
+            agent_script = script_base_path + WIRELESS_AGENT
+            process = subprocess.Popen(
+                [sys.executable, agent_script, 'fromfile', preseed_path]
+            )
 
-    connected = 1
-    connection_attempts = 20
-    while connected != 0 and connected < (connection_attempts + 1):
-        try:
-            service.Connect(timeout=15000)
-            connected = 0
-        except dbus.DBusException as e:
-            if len(e.args) > 0 and e.args[0] == 'Not registered' and agent_needed:
-                connected += 1
-                time.sleep(1)
-                print('Connection agent not started yet, waiting a second')
+        print('Attempting connection to ' + path)
+        service = connman.get_service_interface(path)
 
-            else:  # another type of exception jump out of the loop
-                connected = (connection_attempts + 1)
-                print('DBusException Raised: ' + str(e))
+        connected = 1
+        connection_attempts = 20
+        while connected != 0 and connected < (connection_attempts + 1):
+            try:
+                service.Connect(timeout=15000)
+                connected = 0
+            except dbus.DBusException as e:
+                if len(e.args) > 0 and e.args[0] == 'Not registered' and agent_needed:
+                    connected += 1
+                    time.sleep(1)
+                    print('Connection agent not started yet, waiting a second')
 
-    print('Connection to ' + path + ' : ' + str(connected == 0))
-    if agent_needed:
-        if process:
-            process.kill()
-        os.remove('/tmp/preseed_data')
+                else:  # another type of exception jump out of the loop
+                    connected = (connection_attempts + 1)
+                    print('DBusException Raised: ' + str(e))
 
-    return connected == 0
+        print('Connection to ' + path + ' : ' + str(connected == 0))
+
+        return connected == 0
+    finally:
+        # Always clean up the agent process and the on-disk passphrase, even
+        # if something above raised (e.g. an unexpected DBusException).
+        if agent_needed:
+            if process:
+                process.kill()
+            if preseed_path and os.path.isfile(preseed_path):
+                os.remove(preseed_path)
 
 
 def wifi_disconnect(path):
