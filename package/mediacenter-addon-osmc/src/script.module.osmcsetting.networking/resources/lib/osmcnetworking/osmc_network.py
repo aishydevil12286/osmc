@@ -156,15 +156,24 @@ def apply_network_changes(settings_dict, internet_protocol):
         path = settings_dict['path']
         service = connman.get_service_interface(path)
 
+        method = settings_dict[internet_protocol]['Method']
         ipv4_configuration = {
-            'Method': make_variant(settings_dict[internet_protocol]['Method']),
-            'Address': make_variant(settings_dict[internet_protocol]['Address']),
-            'Netmask': make_variant(settings_dict[internet_protocol]['Netmask'])
+            'Method': make_variant(method),
         }
 
-        if settings_dict[internet_protocol]['Gateway']:
-            ipv4_configuration['Gateway'] = \
-                make_variant(settings_dict[internet_protocol]['Gateway'])
+        # Only send Address/Netmask/Gateway for a manual (static) configuration.
+        # Including stale static values alongside Method=dhcp/auto confuses connman
+        # and can prevent it from actually acquiring a DHCP lease after switching
+        # back from a manual configuration.
+        if method == 'manual':
+            ipv4_configuration['Address'] = \
+                make_variant(settings_dict[internet_protocol]['Address'])
+            ipv4_configuration['Netmask'] = \
+                make_variant(settings_dict[internet_protocol]['Netmask'])
+
+            if settings_dict[internet_protocol]['Gateway']:
+                ipv4_configuration['Gateway'] = \
+                    make_variant(settings_dict[internet_protocol]['Gateway'])
 
         service.SetProperty('IPv4.Configuration', ipv4_configuration)
         time.sleep(2)
