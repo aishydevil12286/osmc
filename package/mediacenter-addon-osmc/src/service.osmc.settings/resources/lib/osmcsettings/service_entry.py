@@ -22,6 +22,7 @@ from io import open
 import xbmc
 import xbmcaddon
 import xbmcgui
+from osmccommon import osmc_paths
 from osmccommon.osmc_comms import Communicator
 from osmccommon.osmc_language import LangRetriever
 from osmccommon.osmc_logging import StandardLogger
@@ -56,7 +57,10 @@ class Main(object):
         self.parent_queue = Queue.Queue()
 
         # create socket, listen for comms
-        self.listener = Communicator(self.parent_queue, socket_file='/var/tmp/osmc.settings.sockfile')
+        self.listener = Communicator(
+            self.parent_queue,
+            socket_file=osmc_paths.preferred(osmc_paths.SETTINGS_SOCKET_PATHS)
+        )
         self.listener.start()
 
         # the gui is created and stored in memory for quick access
@@ -342,8 +346,8 @@ class Main(object):
                     })
                     message = json.dumps(message)
 
-                    with closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)) as open_socket:
-                        open_socket.connect('/var/tmp/osmc.settings.update.sockfile')
+                    with closing(osmc_paths.connect(
+                            osmc_paths.UPDATE_SOCKET_PATHS)) as open_socket:
                         if not isinstance(message, (bytes, bytearray)):
                             message = message.encode('utf-8', 'ignore')
                         open_socket.sendall(message)
