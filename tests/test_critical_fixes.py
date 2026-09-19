@@ -49,7 +49,7 @@ class TestGrabLogsCredentialMasking(unittest.TestCase):
 
     def test_webdav_credentials_are_masked(self):
         line = '<path>davs://myuser:supersecret@example.com:443/Videos</path>\n'
-        masked = self.grablogs.Main._mask_sensitive([line])[0]
+        masked = self.grablogs.Main._mask_sensitive(line)
 
         self.assertNotIn('supersecret', masked,
                           'WebDAV password leaked past masking')
@@ -58,7 +58,7 @@ class TestGrabLogsCredentialMasking(unittest.TestCase):
     def test_common_multichar_schemes_are_masked(self):
         for scheme in ('http', 'https', 'ftp', 'smb', 'nfs', 'davs'):
             line = '%s://user:hunter2@host.example/path\n' % scheme
-            masked = self.grablogs.Main._mask_sensitive([line])[0]
+            masked = self.grablogs.Main._mask_sensitive(line)
             self.assertNotIn('hunter2', masked,
                               'Password leaked for scheme %r' % scheme)
 
