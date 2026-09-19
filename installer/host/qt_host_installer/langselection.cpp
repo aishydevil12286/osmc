@@ -58,27 +58,40 @@ void LangSelection::on_languagenextButton_clicked()
     ui->languagenextButton->setEnabled(false);
     if (ui->languageSelectionBox->currentIndex() != 0 && ui->deviceSelectionBox->currentIndex() != 0)
     {
-        SupportedDevice *device;
+        SupportedDevice *device = nullptr;
         for (int i = 0; i < devicesList.count(); i++)
         {
             SupportedDevice *dev = devicesList.at(i);
             if (dev->getDeviceName() == ui->deviceSelectionBox->currentText())
                 device = dev;
         }
-        if (ui->languageSelectionBox->currentText() == tr("English"))
-            emit languageSelected(tr("English"), *device);
-        else
+        if (device == nullptr)
         {
-            for (int i = 0; i < translationfileNames.size(); ++i)
+            utils::displayError(tr("Error"), tr("You need to select an option!"));
+            ui->languagenextButton->setEnabled(true);
+            return;
+        }
+        if (ui->languageSelectionBox->currentText() == tr("English"))
+        {
+            emit languageSelected(tr("English"), *device);
+            return;
+        }
+        for (int i = 0; i < translationfileNames.size(); ++i)
+        {
+            QString locale;
+            locale = translationfileNames[i];
+            locale.truncate(locale.lastIndexOf('.'));
+            locale.remove(0, locale.indexOf('_') + 1);
+            if (QLocale::languageToString(QLocale(locale).language()) == ui->languageSelectionBox->currentText())
             {
-                QString locale;
-                locale = translationfileNames[i];
-                locale.truncate(locale.lastIndexOf('.'));
-                locale.remove(0, locale.indexOf('_') + 1);
-                if (QLocale::languageToString(QLocale(locale).language()) == ui->languageSelectionBox->currentText())
-                    emit languageSelected(locale, *device);
+                emit languageSelected(locale, *device);
+                return;
             }
         }
+        /* Selected language string didn't match any translation file: don't
+           proceed with an uninitialized/incorrect locale, and let the user retry. */
+        utils::displayError(tr("Error"), tr("You need to select an option!"));
+        ui->languagenextButton->setEnabled(true);
     }
     else
     {
