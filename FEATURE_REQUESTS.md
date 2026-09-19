@@ -1,0 +1,103 @@
+# Feature Requests
+
+Tracked here instead of GitHub Issues, which are disabled on this fork.
+
+---
+
+## Add a real unit-test layer for the Python addon codebase
+
+**Status:** Not started
+**Related:** #1 (critical fixes), #2 (major fixes), #3 (security hardening)
+
+### Summary
+
+Add proper, executing unit-test coverage across the Python addon codebase
+(`package/mediacenter-addon-osmc/src/**`), replacing/augmenting the static
+source-text regression checks currently in `tests/test_critical_fixes.py`,
+`tests/test_major_fixes.py`, and `tests/test_security_hardening.py`.
+
+Those three files verify fixes by asserting patterns in the source text
+rather than executing the code, because almost every addon module imports
+`xbmc`/`xbmcgui`/`xbmcaddon`/`xbmcvfs`/`dbus`/`apt` at import time (directly
+or transitively), none of which are installable outside a real OSMC/Kodi
+runtime. A proper test layer needs lightweight stub/mock modules for these
+so real imports succeed and real functions can be exercised.
+
+### Scope assessment (from a full-codebase scan)
+
+- **82 Python lib modules, ~17,300 lines**, across 9 addons (excludes the
+  vendored `xmltodict` library).
+- **31 of 82 files** import `xbmc`/`xbmcgui`/`xbmcaddon`/`dbus`/`apt`
+  directly; most of the remaining 51 import a sibling module that does, so
+  nearly all 82 are currently unimportable standalone.
+- Also **39 C++ files** in `installer/host/qt_host_installer` +
+  `installer/target/qt_target/qt_target_installer` — real unit testing
+  there needs a separate Qt test harness (QTest/Catch2 + CMake), out of
+  scope for this item.
+
+### Proposed test-layer components
+
+1. Lightweight stub packages for `xbmc`, `xbmcgui`, `xbmcaddon`, `xbmcvfs`,
+   `dbus`, `apt` (~6 files) so real imports succeed against fakes instead
+   of crashing.
+2. Shared `conftest.py` / bootstrap wiring the stubs into `sys.path`
+   before test collection.
+3. `pytest.ini` / runner config.
+4. One `test_*.py` per addon module worth covering.
+
+### Coverage tiers
+
+- **Tier 1 — pure logic, no mocking needed** (~15 modules, ~60-80 tests):
+  `grablogs.py` masking, `osmc_language.py`, scheduler math,
+  string/config parsers, preseeder-style data builders.
+- **Tier 2 — logic behind an xbmc/dbus/apt boundary, testable with stubs**
+  (~30 modules, ~120-180 tests): `osmc_network.py`, `apt_cache_action.py`,
+  `osmc_backups.py`, `services_gui.py` business logic, `apf_store.py`,
+  bluetooth/wireless agents — the exact files where real bugs have already
+  been found and fixed (#1, #2, #3).
+- **Tier 3 — GUI event-handler classes** (~35 modules): `WindowXMLDialog`
+  subclasses, mostly widget-wiring with little independent logic. Full
+  coverage requires simulating Kodi's control/focus system (high effort,
+  lower bug-catching value); thin smoke tests recommended over full
+  coverage.
+
+### Estimate
+
+| Item | Count |
+|---|---|
+| New stub/mock modules | ~6 files |
+| Test harness (conftest.py, pytest.ini) | 2 files |
+| New test_*.py files | ~45-55 (Tier 1+2) up to ~80 (+ Tier 3) |
+| New test cases | ~200 (Tier 1+2) up to ~300+ (+ Tier 3) |
+
+### Suggested delivery
+
+Phased, one branch/PR per addon or logical group (e.g. `osmccommon` +
+`updates` first since real bugs were already found there, then
+`networking`, `services`, `apfstore`, etc.) rather than one large PR -
+mirrors how the critical/major/security fix batches were delivered
+(#1, #2, #3).
+
+---
+
+## Other feature ideas from the security/stability review
+
+Not yet scoped in detail; noted here for later triage.
+
+- **Atomic + scoped temp files sweep** — `wifi_connect`'s fix (#3) is the
+  template; audit the rest of the codebase for similar fixed/predictable
+  `/tmp` paths.
+- **Background/non-blocking apt updates** (osmc/osmc#622) — update checks
+  currently block the checking thread; move package download to idle time.
+- **grab-logs log rotation** — now that masking works correctly (#1),
+  cap/rotate `/var/tmp/uploadlog.txt` and Kodi logs to avoid unbounded
+  growth on constrained storage (SD cards/eMMC).
+- **Watchdog/auto-restart for Kodi crashes** — no supervised-restart
+  mechanism found for the Kodi process; a systemd `Restart=on-failure` +
+  backoff would improve stability on HDMI/driver crashes without a manual
+  power cycle.
+- **`os.system`/`os.popen` → `subprocess` sweep** — beyond the one fixed
+  in #3, ~10 other call sites (`osmc_walkthru.py`, `osmc_hotfix.py`,
+  `service_entry.py`, `apf_store.py`) use the same lower-risk-today but
+  injection-prone pattern; standardizing on `subprocess.call([...])`
+  repo-wide closes off this whole class of future bugs.
