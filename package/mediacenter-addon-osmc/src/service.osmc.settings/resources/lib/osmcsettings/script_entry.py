@@ -9,10 +9,10 @@
 """
 
 import os
-import socket
 
 import xbmcaddon
 import xbmcgui
+from osmccommon import osmc_paths
 from osmccommon.osmc_language import LangRetriever
 from osmccommon.osmc_logging import StandardLogger
 
@@ -25,8 +25,7 @@ def run():
     log('My OSMC opening')
     try:
 
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as open_socket:
-            open_socket.connect('/var/tmp/osmc.settings.sockfile')
+        with osmc_paths.connect(osmc_paths.SETTINGS_SOCKET_PATHS) as open_socket:
             open_socket.sendall(b'open')
 
     except:

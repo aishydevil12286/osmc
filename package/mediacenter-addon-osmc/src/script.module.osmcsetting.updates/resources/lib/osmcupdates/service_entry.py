@@ -24,6 +24,7 @@ import xbmcaddon
 import xbmcgui
 import xbmcvfs
 from osmccommon import osmc_comms
+from osmccommon import osmc_paths
 from osmccommon.osmc_language import LangRetriever
 from osmccommon.osmc_logging import StandardLogger
 from osmccommon.osmc_scheduler import SimpleScheduler
@@ -55,8 +56,7 @@ log = StandardLogger(ADDON_ID, os.path.basename(__file__)).log
 
 
 def exit_osmc_settings_addon():
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as open_socket:
-        open_socket.connect('/var/tmp/osmc.settings.sockfile')
+    with osmc_paths.connect(osmc_paths.SETTINGS_SOCKET_PATHS) as open_socket:
         open_socket.sendall(b'exit')
 
     return 'OSMC Settings addon called to exit'
@@ -178,8 +178,10 @@ class Main(object):
 
         # create socket, listen for comms
         self.listener = \
-            osmc_comms.Communicator(self.parent_queue,
-                                    socket_file='/var/tmp/osmc.settings.update.sockfile')
+            osmc_comms.Communicator(
+                self.parent_queue,
+                socket_file=osmc_paths.preferred(osmc_paths.UPDATE_SOCKET_PATHS)
+            )
         self.listener.start()
 
         # grab the settings, saves them into a dict called seld.s
@@ -213,10 +215,13 @@ class Main(object):
 
         # this flag is present when updates have been downloaded but the user wants to
         # choose when to install using the manual control in the settings
-        self.block_update_file = '/var/tmp/.suppress_osmc_update_checks'
+        # written to /run/osmc when available; both locations are read and
+        # removed, so a flag left by pre-upgrade code is still honoured.
+        self.block_update_file = \
+            osmc_paths.preferred(osmc_paths.SUPPRESS_UPDATE_CHECKS_PATHS)
 
         # if the file is present, then suppress further update checks and show the notification
-        if os.path.isfile(self.block_update_file):
+        if osmc_paths.existing(osmc_paths.SUPPRESS_UPDATE_CHECKS_PATHS):
             self.skip_update_check = True
 
             # if the user has suppressed icon notification of updates and has chosen not
@@ -228,8 +233,9 @@ class Main(object):
             self.skip_update_check = False
 
         # check for the external update failed
-        fail_check_file = '/var/tmp/.osmc_failed_update'
-        if os.path.isfile(fail_check_file):
+        fail_check_files = osmc_paths.existing(osmc_paths.FAILED_UPDATE_PATHS)
+        if fail_check_files:
+            fail_check_file = fail_check_files[0]
             with open(fail_check_file, 'r', encoding='utf-8') as f:
                 package = f.readline()
 
@@ -880,10 +886,11 @@ class Main(object):
         self.window.setProperty('OSMC_notification', 'false')
 
         # remove the file that blocks further update checks
-        try:
-            os.remove(self.block_update_file)
-        except:
-            pass
+        for path in osmc_paths.existing(osmc_paths.SUPPRESS_UPDATE_CHECKS_PATHS):
+            try:
+                os.remove(path)
+            except:
+                pass
 
         # run an apt-cache clean
         self.clean_apt_cache()
@@ -1129,10 +1136,11 @@ class Main(object):
 
             # delete the block_update_file if it exists, so that the icon doesn't
             # display on next boot
-            try:
-                os.remove(self.block_update_file)
-            except:
-                pass
+            for path in osmc_paths.existing(osmc_paths.SUPPRESS_UPDATE_CHECKS_PATHS):
+                try:
+                    os.remove(path)
+                except:
+                    pass
 
             return 'bail', 'There are no osmc packages'
 
