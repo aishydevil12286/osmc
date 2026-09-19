@@ -8,6 +8,12 @@ Group=osmc
 Type=notify
 ExecStartPre=/bin/sleep 10
 ExecStart=/usr/bin/transmission-daemon -f --log-error --allowed *.*.*.*
+# Transmission needs time to flush torrent resume state and fsync downloaded
+# data to disk on shutdown/restart. Without an explicit timeout, systemd's
+# default can SIGKILL it mid-write on a reboot, corrupting in-progress
+# downloads and the resume cache.
+KillSignal=SIGTERM
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target

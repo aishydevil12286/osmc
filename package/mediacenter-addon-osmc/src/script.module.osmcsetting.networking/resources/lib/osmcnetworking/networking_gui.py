@@ -992,6 +992,18 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
         ip_address, subnet, default_gateway, primary_dns, secondary_dns = \
             (self.getControl(x).getLabel() for x in controls)
 
+        # current_network_config (or the protocol/Nameservers entries within it) can be
+        # None or missing here if this is invoked before a config has been populated
+        # (e.g. focus lands on an IP field while the adapter is being enabled).
+        if not self.current_network_config:
+            self.current_network_config = {}
+
+        if not self.current_network_config.get(self.internet_protocol):
+            self.current_network_config[self.internet_protocol] = {}
+
+        if not self.current_network_config.get('Nameservers'):
+            self.current_network_config['Nameservers'] = {}
+
         self.current_network_config[self.internet_protocol]['Address'] = ip_address
         self.current_network_config[self.internet_protocol]['Netmask'] = subnet
         self.current_network_config[self.internet_protocol]['Gateway'] = default_gateway
