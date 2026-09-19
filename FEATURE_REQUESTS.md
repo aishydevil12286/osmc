@@ -80,6 +80,42 @@ mirrors how the critical/major/security fix batches were delivered
 
 ---
 
+## Move cross-process `/tmp` coordination to `/run/osmc/`
+
+**Status:** Not started
+**Blocks:** `PrivateTmp=true` on `mediacenter.service` (Kodi)
+
+`/tmp` is currently used as a cross-process IPC and coordination medium,
+which prevents sandboxing Kodi with `PrivateTmp`:
+
+| Path | Used by |
+|---|---|
+| `/tmp/osmc.settings.sockfile`, `/tmp/osmc.settings.update.sockfile` | Unix sockets between the Kodi addon and the root update daemon |
+| `/tmp/NO_UPDATE` | written by the `ftr` service, read/removed by the Kodi addon |
+| `/tmp/reboot-needed` | ~17 references across processes |
+| `/tmp/.suppress_osmc_update_checks` | cross-process flag |
+
+`PrivateTmp=true` gives a unit a private `/tmp` **and** `/var/tmp`, so
+setting it on `mediacenter.service` today would sever all of the above.
+
+Two reasons to do this beyond enabling the sandbox:
+
+1. `/tmp` is world-writable, so those sockets are exposed to squatting and
+   symlink attacks by any local process.
+2. `/run` is the correct location for runtime state. `/run/osmc/` owned
+   `0750 root:osmc` fixes both problems at once.
+
+Once migrated, `PrivateTmp=true` on `mediacenter.service` becomes safe, and
+would have made the WiFi passphrase leak fixed in #3 unexploitable by
+anything outside Kodi.
+
+Note `NoNewPrivileges=true` on `mediacenter.service` remains blocked on
+something larger — it would break every `sudo` call the settings addons
+make. That one needs the privilege split described in
+`docs/ARCHITECTURE_REWRITE.md`, not just a path change.
+
+---
+
 ## Other feature ideas from the security/stability review
 
 Not yet scoped in detail; noted here for later triage.

@@ -15,5 +15,26 @@ ExecStart=/usr/bin/transmission-daemon -f --log-error --allowed *.*.*.*
 KillSignal=SIGTERM
 TimeoutStopSec=60
 
+# Sandboxing. transmission-daemon parses untrusted input from arbitrary
+# internet peers and runs as 'osmc', which holds passwordless sudo - so
+# without NoNewPrivileges a remote code execution bug here reaches root
+# directly, with no escalation step required.
+#
+# ProtectHome is deliberately NOT set: downloads and config live under
+# /home/osmc. ProtectSystem is 'full' rather than 'strict' so that download
+# targets on removable media under /media keep working.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
 [Install]
 WantedBy=multi-user.target
