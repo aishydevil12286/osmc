@@ -190,18 +190,22 @@ if __name__ == '__main__':
     _path = "/test/agent"
     obj = Agent(bus, _path)
 
-    if len(argv()) >= 2:
-        for _arg in argv()[1:]:
-            if _arg.startswith("fromfile"):
-                with open("/tmp/preseed_data", 'r', encoding='utf-8') as key_file:
-                    data = key_file.read()
+    if len(argv()) >= 2 and argv()[1] == "fromfile":
+        # The caller (osmc_network.wifi_connect) passes the private, unpredictable
+        # temp file it created as the next argument. Fall back to the old fixed
+        # path only for backwards compatibility with anything still invoking us
+        # the old way.
+        preseed_file = argv()[2] if len(argv()) >= 3 else "/tmp/preseed_data"
 
-                lines = data.split('\n')
-                if len(lines) > 0 and len(lines[0]) > 0:
-                    obj.passphrase = lines[0]
-                if len(lines) > 1 and len(lines[1]) > 0:
-                    obj.name = lines[1]
-                    obj.ssid = lines[1]
+        with open(preseed_file, 'r', encoding='utf-8') as key_file:
+            data = key_file.read()
+
+        lines = data.split('\n')
+        if len(lines) > 0 and len(lines[0]) > 0:
+            obj.passphrase = lines[0]
+        if len(lines) > 1 and len(lines[1]) > 0:
+            obj.name = lines[1]
+            obj.ssid = lines[1]
 
     try:
         manager.RegisterAgent(_path)

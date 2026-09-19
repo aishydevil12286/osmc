@@ -54,14 +54,14 @@ class MaitreD(object):
     @clog(log)
     def enable_service(self, s_entry):
         for service in s_entry:
-            os.system("sudo /bin/systemctl enable " + service)
-            os.system("sudo /bin/systemctl start " + service)
+            subprocess.call(["sudo", "/bin/systemctl", "enable", service])
+            subprocess.call(["sudo", "/bin/systemctl", "start", service])
 
     @clog(log)
     def disable_service(self, s_entry):
         for service in s_entry:
-            os.system("sudo /bin/systemctl disable " + service)
-            os.system("sudo /bin/systemctl stop " + service)
+            subprocess.call(["sudo", "/bin/systemctl", "disable", service])
+            subprocess.call(["sudo", "/bin/systemctl", "stop", service])
 
     @clog(log)
     def is_running(self, s_entry):
