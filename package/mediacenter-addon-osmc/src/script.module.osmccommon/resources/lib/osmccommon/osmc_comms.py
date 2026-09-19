@@ -23,6 +23,10 @@ log = StandardLogger('script.module.osmccommon', os.path.basename(__file__)).log
 
 class Communicator(threading.Thread):
 
+    # How long to wait for a sender to finish and close the connection.
+    # Matches the total budget the previous busy-wait allowed itself.
+    RECV_TIMEOUT = 0.5
+
     def __init__(self, parent_queue, socket_file):
 
         # queue back to parent
@@ -114,32 +118,43 @@ class Communicator(threading.Thread):
 
             log('Connection is active... %s' % self.address)
             try:
-                # turn off blocking for this temporary connection
-                # this will allow the loop to collect all parts of the message
-                conn.setblocking(False)
+                # Read until the sender closes, rather than treating the first
+                # chunk as the whole message. Every sender calls sendall() and
+                # then closes, so an empty read means the message is complete -
+                # previously a message that arrived in more than one chunk was
+                # silently truncated, and the resulting JSON failed to parse.
+                #
+                # A socket timeout also replaces the former 5ms busy-wait on a
+                # non-blocking socket: the kernel wakes us when data arrives
+                # instead of spinning up to 100 times per message.
+                conn.settimeout(self.RECV_TIMEOUT)
 
-                passed = False
-                total_wait = 0
-                wait = 0.005
-                data = ''
-                while not passed and total_wait < 0.5:
-                    try:
-                        data = conn.recv(8192)
-                    except:
-                        total_wait += wait
-                        if self.monitor.waitForAbort(wait):
+                chunks = []
+                try:
+                    while True:
+                        chunk = conn.recv(8192)
+                        if not chunk:
                             break
 
-                        continue
+                        chunks.append(chunk)
 
-                    passed = True
-                    data = data.decode('utf-8')
-                    log('Connection received partial data... %s @ %s' % (data, self.address))
+                except socket.timeout:
+                    # Sender did not close in time. Use whatever arrived, which
+                    # is what the previous implementation did.
+                    log('Connection timed out while reading... %s' % self.address)
 
-                if not passed:
+                except OSError:
+                    # Don't let a transient socket error kill the listener
+                    # thread; the old bare except had the same effect.
+                    log('Error reading from connection... %s' % self.address)
+                    log(traceback.format_exc())
+
+                if not chunks:
                     log('Connection received no data... %s' % self.address)
                     self.stopped = True
                     break
+
+                data = b''.join(chunks).decode('utf-8')
 
                 log('Connection received data... %s @ %s' % (data, self.address))
 
