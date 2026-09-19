@@ -10,7 +10,7 @@ if [ "$1" = "configure" ]; then
         systemctl enable videoenhancement.service >/dev/null 2>&1
 	systemctl enable doviloader.service >/dev/null 2>&1
         if ischroot; then exit 0; fi
-        touch /tmp/reboot-needed
+        osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 fi
 
 ldconfig

@@ -8,8 +8,7 @@ ECDSA_KEY="/etc/ssh/ssh_host_ecdsa_key"
 ED25519_KEY="/etc/ssh/ssh_host_ed25519_key"
 PRESEED_FILE="/boot/preseed.cfg"
 POSTINST_FILE="/boot/postinst.sh"
-touch /tmp/NO_UPDATE
-chown osmc:osmc /tmp/NO_UPDATE
+osmc-runtime-flag set no-update 2>/dev/null || { touch /tmp/NO_UPDATE; chown osmc:osmc /tmp/NO_UPDATE; }
 rm -f $RSA_KEY
 dbus-uuidgen > /var/lib/dbus/machine-id
 depmod

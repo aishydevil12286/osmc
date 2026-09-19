@@ -38,6 +38,19 @@ except ImportError:
 ADDON_ID = 'script.module.osmcsetting.updates'
 DIALOG = xbmcgui.Dialog()
 
+# Files whose existence means an installed package requires a reboot.
+#
+# OSMC's own flag is set by package maintainer scripts via
+# /usr/bin/osmc-runtime-flag. The /tmp entry is the location it used before
+# the move to /run/osmc, still checked so a flag set by a package from
+# before the migration is not missed - drop it one release after every
+# writer writes to /run/osmc.
+REBOOT_REQUIRED_FILES = [
+    '/run/osmc/reboot-needed',
+    '/var/run/reboot-required',  # Debian's own
+    '/tmp/reboot-needed',        # legacy OSMC location
+]
+
 log = StandardLogger(ADDON_ID, os.path.basename(__file__)).log
 
 
@@ -724,8 +737,7 @@ class Main(object):
         # notify the user that the installation or uninstall of their desired apfs has
         # completed successfully prompt for immediate reboot if needed.
 
-        if any([os.path.isfile('/tmp/reboot-needed'),
-                os.path.isfile('fname/var/run/reboot-required')]):
+        if any(os.path.isfile(x) for x in REBOOT_REQUIRED_FILES):
             reboot = DIALOG.yesno(self.lang(32090),
                                   '[CR]'.join([self.lang(32091), self.lang(32133)]),
                                   yeslabel=self.lang(32081), nolabel=self.lang(32082))
@@ -1276,11 +1288,10 @@ class Main(object):
     @staticmethod
     def check_if_reboot_required():
         """
-            Checks for the existence of two specific files that indicate an installed
+            Checks for the existence of the flag files that indicate an installed
             package mandates a reboot.
         """
-        flag_files = ['/tmp/reboot-needed', '/var/run/reboot-required']
-        return bool(any([os.path.isfile(x) for x in flag_files]))
+        return any(os.path.isfile(x) for x in REBOOT_REQUIRED_FILES)
 
     @staticmethod
     def clean_apt_cache():

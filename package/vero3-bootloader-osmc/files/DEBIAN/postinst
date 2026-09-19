@@ -10,5 +10,5 @@ if [ "$1" = "configure" ]; then
 	if [ ! -f /opt/vero3/${UBOOT} ]; then echo "U-Boot file missing" && exit 1; fi
 	dd if=/opt/vero3/${UBOOT} of=/dev/mmcblk0 conv=fsync bs=1 count=11
 	dd if=/opt/vero3/${UBOOT} of=/dev/mmcblk0 conv=fsync bs=512 skip=1 seek=1
-	touch /tmp/reboot-needed
+	osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 fi

@@ -1,0 +1,98 @@
+#!/bin/sh
+#
+# Manage OSMC runtime coordination flags under /run/osmc.
+#
+# These flags are set by privileged code (package maintainer scripts, the
+# first-time-run scripts) and read or cleared by the Kodi settings addons
+# running as 'osmc'. They previously lived in /tmp, which is world-writable
+# and cannot be shared with a unit that sets PrivateTmp=.
+#
+# Usage:
+#   osmc-runtime-flag set   <flag>
+#   osmc-runtime-flag clear <flag>
+#   osmc-runtime-flag path  <flag>
+#
+# Known flags:
+#   reboot-needed   a package was installed that requires a reboot
+#   no-update       suppress updates during first-time run
+#
+# COMPATIBILITY: 'set' and 'clear' also mirror the flag to its legacy /tmp
+# path. During an upgrade the running Kodi process still has the
+# pre-upgrade addon code loaded, which looks only in /tmp, and it keeps
+# running until Kodi restarts. Without the mirror those users would miss a
+# reboot prompt. Remove legacy_path() and its callers one release after
+# every reader reads from /run/osmc.
+
+set -u
+
+# OSMC_RUN_DIR exists so the test suite can exercise this script directly
+# rather than a rewritten copy. Callers are root maintainer scripts, so an
+# override grants nothing that the caller does not already have.
+RUNDIR="${OSMC_RUN_DIR:-/run/osmc}"
+
+usage() {
+	echo "usage: ${0##*/} {set|clear|path} <flag>" >&2
+	exit 2
+}
+
+# Map a flag name to the legacy /tmp path it used to occupy, or "" if it
+# never had one.
+legacy_path() {
+	case "$1" in
+		reboot-needed) echo /tmp/reboot-needed ;;
+		no-update)     echo /tmp/NO_UPDATE ;;
+		*)             echo "" ;;
+	esac
+}
+
+# The directory normally comes from tmpfiles.d, but a package may be
+# configured before base-files-osmc on a fresh install, and /run is tmpfs so
+# it is empty after every boot.
+ensure_rundir() {
+	[ -d "$RUNDIR" ] && return 0
+	mkdir -p "$RUNDIR" || return 1
+	chown root:osmc "$RUNDIR" 2>/dev/null || true
+	chmod 0770 "$RUNDIR" 2>/dev/null || true
+}
+
+[ $# -eq 2 ] || usage
+
+action="$1"
+flag="$2"
+
+# Reject anything that could escape the directory.
+case "$flag" in
+	*/*|*..*|"") echo "${0##*/}: invalid flag name: $flag" >&2; exit 2 ;;
+esac
+
+target="$RUNDIR/$flag"
+legacy="$(legacy_path "$flag")"
+
+case "$action" in
+	set)
+		ensure_rundir || exit 1
+		touch "$target" || exit 1
+		# Readable and removable by the addon regardless of which side set it.
+		chown root:osmc "$target" 2>/dev/null || true
+		chmod 0660 "$target" 2>/dev/null || true
+
+		if [ -n "$legacy" ]; then
+			# /tmp is sticky, so ownership - not just directory permissions -
+			# decides whether the addon can remove the legacy copy.
+			touch "$legacy" 2>/dev/null && \
+				chown osmc:osmc "$legacy" 2>/dev/null || true
+		fi
+		;;
+	clear)
+		rm -f "$target" 2>/dev/null || true
+		[ -n "$legacy" ] && rm -f "$legacy" 2>/dev/null
+		# rm -f on a missing file is success; never fail a caller on clear.
+		exit 0
+		;;
+	path)
+		echo "$target"
+		;;
+	*)
+		usage
+		;;
+esac

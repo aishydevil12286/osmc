@@ -18,5 +18,5 @@ if [ "$1" = "configure" ]; then
 	systemctl disable brcm43xx.service >/dev/null 2>&1
 	systemctl enable bt-firmware.path >/dev/null 2>&1
 	if ischroot; then exit 0; fi
-	touch /tmp/reboot-needed
+	osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 fi

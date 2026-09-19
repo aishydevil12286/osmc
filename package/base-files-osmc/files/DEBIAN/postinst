@@ -16,7 +16,8 @@ dist_upgrade_migrate ()
 		sed 's/buster\/updates/bullseye-security/g;s/buster/bullseye/g' -i $SRCSFILE
 	done
 	# Signal we want a dist-upgrade and a reboot
-	touch /dist_upgrade_wanted /tmp/reboot-needed
+	touch /dist_upgrade_wanted
+	osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 }
 
 if [ -z "$DPKG_MAINTSCRIPT_PACKAGE" ]; then exit 1; fi
@@ -27,6 +28,11 @@ fi
 if [ "$1" = "configure" ]; then
 	echo "Fixing permissions on busybox."
 	chmod +s /bin/busybox 2>/dev/null
+
+	# /run is tmpfs, so tmpfiles.d recreates /run/osmc on every boot - but
+	# create it now too, so flags set later in this same apt run land there
+	# rather than falling back to /tmp.
+	systemd-tmpfiles --create /usr/lib/tmpfiles.d/osmc.conf 2>/dev/null || true
 
 	systemctl daemon-reload
 	systemctl enable osmc-prune-devel.timer
