@@ -23,6 +23,31 @@ from datetime import datetime
 import apt
 
 
+# Kept in step with osmccommon.osmc_paths. This script is launched as a bare
+# `python3 <script>` with no Kodi addon sys.path, so it cannot import that
+# module. tests/test_run_osmc_sockets.py asserts the two stay identical.
+UPDATE_SOCKET_PATHS = [
+    '/run/osmc/settings-update.sock',
+    '/var/tmp/osmc.settings.update.sockfile',
+]
+
+
+def connect_socket(paths):
+    """Connect to the first reachable path, newest location first."""
+    last_error = None
+
+    for path in paths:
+        open_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            open_socket.connect(path)
+            return open_socket
+        except (OSError, socket.error) as error:
+            last_error = error
+            open_socket.close()
+
+    raise last_error
+
+
 def argv():
     return sys.argv
 
@@ -36,8 +61,7 @@ def call_parent(raw_message, data=None):
     message = json.dumps(message)
 
     try:
-        with closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)) as open_socket:
-            open_socket.connect('/var/tmp/osmc.settings.update.sockfile')
+        with closing(connect_socket(UPDATE_SOCKET_PATHS)) as open_socket:
             message = message.encode('utf-8')
             open_socket.sendall(message)
 
@@ -62,7 +86,13 @@ class Main(object):
 
         self.action = action
 
-        self.block_update_file = '/var/tmp/.suppress_osmc_update_checks'
+        # Both locations are cleared: this runs as root while the addon that
+        # wrote the flag runs as 'osmc', and either side may still be on
+        # pre-upgrade code using the legacy path.
+        self.block_update_files = [
+            '/run/osmc/suppress-update-checks',
+            '/var/tmp/.suppress_osmc_update_checks',
+        ]
 
         self.action_to_method = {
             'update': self.update,
@@ -277,11 +307,14 @@ class Main(object):
         })
 
         # remove the file that blocks further update checks
-        try:
-            os.remove(self.block_update_file)
+        for block_update_file in self.block_update_files:
+            if not os.path.exists(block_update_file):
+                continue
+            try:
+                os.remove(block_update_file)
 
-        except:
-            return 'Failed to remove block_update_file'
+            except:
+                return 'Failed to remove block_update_file'
 
         return '%s %s cache committed' % (datetime.now(), 'apt_cache_action.py')
 

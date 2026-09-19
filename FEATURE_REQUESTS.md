@@ -82,7 +82,7 @@ mirrors how the critical/major/security fix batches were delivered
 
 ## Move cross-process `/tmp` coordination to `/run/osmc/`
 
-**Status:** Phase 1 done (cross-package flags), phase 2 outstanding
+**Status:** Phases 1 and 2 done; phase 3 (drop the fallbacks) outstanding
 **Blocks:** `PrivateTmp=true` on `mediacenter.service` (Kodi)
 
 `/tmp` and `/var/tmp` are used as a cross-process coordination medium,
@@ -94,25 +94,52 @@ a unit a private `/tmp` **and** `/var/tmp`, so setting it on
 |---|---|---|
 | `/tmp/reboot-needed` | 15 package maintainer scripts (root) → addon | **done** |
 | `/tmp/NO_UPDATE` | `ftr` first-run scripts (root) → addon | **done** |
-| `/var/tmp/osmc.settings.sockfile` | Unix socket, addon ↔ settings service | outstanding |
-| `/var/tmp/osmc.settings.update.sockfile` | Unix socket, addon ↔ update daemon | outstanding |
-| `/var/tmp/.suppress_osmc_update_checks` | addon (as `osmc`) ↔ `apt_cache_action.py` (as root) | outstanding |
-| `/var/tmp/.osmc_failed_update` | read/removed by the addon | outstanding |
+| `/var/tmp/osmc.settings.sockfile` | Unix socket, addon ↔ settings service | **done** |
+| `/var/tmp/osmc.settings.update.sockfile` | Unix socket, addon ↔ update daemon | **done** |
+| `/var/tmp/.suppress_osmc_update_checks` | addon (as `osmc`) ↔ `apt_cache_action.py` (as root) | **done** |
+| `/var/tmp/.osmc_failed_update` | read/removed by the addon | **done** |
 
-Phase 1 (done) covered the flags written by *other* packages, which is the
-part needing a compatibility window: those writers ship in separate debs
-from their reader, so `/usr/bin/osmc-runtime-flag` mirrors each flag to its
-legacy `/tmp` path while pre-upgrade addon code may still be loaded in the
-running Kodi process.
+Phase 1 covered the flags written by *other* packages, via
+`/usr/bin/osmc-runtime-flag`, which mirrors each flag to its legacy `/tmp`
+path while pre-upgrade addon code may still be loaded in the running Kodi
+process.
 
-Phase 2 (outstanding) is the four `/var/tmp` paths above. All are touched
-only within `mediacenter-addon-osmc`, so they upgrade atomically and need
-no compatibility mirror — but the sockets are on the IPC hot path, so they
-are worth landing as their own change.
+Phase 2 covered the four `/var/tmp` paths. Canonical locations live in
+`osmccommon/osmc_paths.py`; servers bind via `preferred()` and clients try
+`/run/osmc` then the legacy path. `apt_cache_action.py`, `call_parent.py`
+and `call_osmc_parent.py` are launched as bare `python3 <script>` with no
+Kodi addon `sys.path`, so they carry their own copies of the path lists —
+a drift test keeps those in step.
 
-**`PrivateTmp=true` on `mediacenter.service` cannot be set until phase 2
-lands too.** Once it does, it would have made the WiFi passphrase leak
-fixed in #3 unexploitable by anything outside Kodi.
+### Phase 3: remove the fallbacks — and only then set `PrivateTmp`
+
+**The compatibility fallbacks and `PrivateTmp` are mutually exclusive.**
+This is the constraint that decides the sequencing, and it is easy to miss:
+
+- If `/run/osmc` is not usable, a server falls back to binding
+  `/var/tmp/...`.
+- Under `PrivateTmp=true` that `/var/tmp` is **private to the unit**, so a
+  helper in a different process would connect to its own empty namespace.
+- IPC would fail silently rather than loudly — the worst failure shape.
+
+So `PrivateTmp=true` must not be set while any fallback remains. The order
+has to be:
+
+1. Phases 1 and 2 ship, with fallbacks. *(done)*
+2. One release passes so every reader and writer is on `/run/osmc`.
+3. Remove the legacy entries from `osmc_paths.py`, the standalone scripts'
+   copies, `osmc-runtime-flag`'s `legacy_path()`, and `REBOOT_REQUIRED_FILES`.
+4. Only then add `PrivateTmp=true` to `mediacenter.service`.
+
+Step 4 also needs a packaging guard: `/run/osmc` is created by
+**base-files-osmc**, the addons ship in **mediacenter-addon-osmc**, and the
+unit file ships in **mediacenter-osmc** — three packages that upgrade
+independently. Without the fallback to absorb version skew, `mediacenter-osmc`
+should declare a versioned dependency on `base-files-osmc` before enabling
+the sandbox.
+
+Once done, this would have made the WiFi passphrase leak fixed in #3
+unexploitable by anything outside Kodi.
 
 Two reasons to do this beyond enabling the sandbox:
 
