@@ -781,7 +781,7 @@ class Main(object):
 
         self.termprint = termprint
 
-        self.log_blotter = []  # list to hold all the lines that need to be printed/uploaded
+        self.log_file = None  # handle the collected logs are streamed into
 
         self.url = ''
 
@@ -867,24 +867,27 @@ class Main(object):
 
     def launch_process(self):
 
-        self.add_content_index()
+        if not self.open_temp_file():
+            return
 
-        self.process_logs()
+        try:
+            self.write_content_index()
+            self.process_logs()
+
+        finally:
+            self.close_temp_file()
 
         if self.termprint:
             self.write_to_screen()
             return
 
-        result = self.write_to_temp_file()
+        self.dispatch_logs()
 
-        if result:
-            self.dispatch_logs()
-
-    def add_content_index(self):
-        """ Adds the quick look-up references to the start of the log file """
+    def write_content_index(self):
+        """ Writes the quick look-up references to the start of the log file """
 
         # insert the date at the very top
-        self.log_blotter.append('Logs created on: %s\n\n' % right_now())
+        self._write('Logs created on: %s\n\n' % right_now())
         default_entry = {
             'key': '',
             'name': '',
@@ -897,14 +900,14 @@ class Main(object):
                     if not self.valid_hardware(log_entry.get('hwid', '')):
                         continue
 
-                    self.log_blotter.append(log_entry['key'] + '  :  ' + log_entry['name'] + '\n')
+                    self._write(log_entry['key'] + '  :  ' + log_entry['name'] + '\n')
 
-        self.log_blotter.append('\n')
+        self._write('\n')
 
     def process_logs(self):
         """
-            Runs the specific function for the active logs, and appends
-            the contents to the blotter.
+            Runs the specific function for the active logs, writing the
+            contents straight out to the temporary file.
         """
 
         # add the logs themselves
@@ -932,31 +935,33 @@ class Main(object):
         if not self.valid_hardware(hwid):
             return
 
-        self.log_blotter.extend([SECTION_START % (name, key)])
+        self._write(SECTION_START % (name, key))
         print('Grabbing log {name} ...'.format(name=name))
+        if mask:
+            print('Masking private information ...')
         try:
             if ltyp == 'file_log':
+                # Iterate the handle rather than readlines(): a large kodi.log
+                # should not be held in memory in its entirety.
                 with open(actn, 'r', encoding='utf-8') as f:
-                    readlines = f.readlines()
-                    if mask:
-                        readlines = self._mask_sensitive(readlines)
-                    self.log_blotter.extend(readlines)
+                    for line in f:
+                        self._write(self._mask_sensitive(line) if mask else line)
             else:
                 with CommandLineInterface(actn) as f:
-                    readlines = f.readlines()
-                    if mask:
-                        readlines = self._mask_sensitive(readlines)
-                    self.log_blotter.extend(readlines)
+                    # readlines() here returns the command's whole output as a
+                    # single string, so write it as one - the previous
+                    # blotter.extend() iterated it *character by character*.
+                    output = f.readlines()
+                    self._write(self._mask_sensitive(output) if mask else output)
         except:
             print('An error occurred while grabbing %s:\n %s' % (name, traceback.format_exc().splitlines()[-1]))
-            self.log_blotter.extend(['An error occurred while grabbing %s:\n %s' % (name, traceback.format_exc().splitlines()[-1])])
+            self._write('An error occurred while grabbing %s:\n %s' % (name, traceback.format_exc().splitlines()[-1]))
 
-        self.log_blotter.extend([SECTION_END % (name, key)])
+        self._write(SECTION_END % (name, key))
 
     @staticmethod
-    def _mask_sensitive(lines_to_mask):
-        # mask potentially sensitive information in blotter
-        print('Masking private information ...')
+    def _mask_sensitive(text_to_mask):
+        """ Masks potentially sensitive information in a chunk of text. """
 
         def _mask(message):
             mask = '**masked*by*grab-logs**'
@@ -975,11 +980,9 @@ class Main(object):
 
             return masked_message
 
-        return [_mask(line) for line in lines_to_mask]
+        return _mask(text_to_mask)
 
     def write_to_screen(self):
-        self.write_to_temp_file()
-
         with open(TEMP_LOG_FILE, 'rb') as f:
             lines = f.readlines()
 
@@ -988,12 +991,15 @@ class Main(object):
 
         print(screen_dump)
 
-    def write_to_temp_file(self):
-        """ Writes the logs to a single temporary file """
-        # clean up the blotter
+    def open_temp_file(self):
+        """ Clears any previous log and opens the temporary file for writing.
+
+            Sections are streamed into this handle as they are collected
+            rather than accumulated in memory first - grab-logs is run on
+            devices with as little as 512MB of RAM, usually at the point
+            where something is already going wrong.
+        """
         print('Writing logs to temp file ...')
-        self.log_blotter = [x.replace('\0', '').replace('\ufeff', '').encode('utf-8')
-                            for x in self.log_blotter if hasattr(x, 'replace')]
 
         if os.path.isfile(TEMP_LOG_FILE):
             slept = 0
@@ -1008,18 +1014,35 @@ class Main(object):
                 slept += sleep_inc
 
         try:
-            with open(TEMP_LOG_FILE, 'wb') as f:
-                # write the blotter contents
-                f.writelines(self.log_blotter)
-
+            self.log_file = open(TEMP_LOG_FILE, 'wb')
             return True
 
         except:
-
             log('Unable to write temporary log to %s' % TEMP_LOG_FILE)
             log('Failed')
 
+            return False
+
+    def close_temp_file(self):
+        if not self.log_file:
             return
+
+        try:
+            self.log_file.close()
+
+        except:
+            log('Failed to close temporary log %s' % TEMP_LOG_FILE)
+
+        self.log_file = None
+
+    def _write(self, text):
+        """ Writes a chunk of the log out, stripping the characters that
+            would otherwise corrupt the upload. """
+        if not self.log_file or not hasattr(text, 'replace'):
+            return
+
+        text = text.replace('\0', '').replace('\ufeff', '')
+        self.log_file.write(text.encode('utf-8'))
 
     def dispatch_logs(self):
         """ Either copies the combined logs to the /boot directory or Uploads them to the pastebin. """
