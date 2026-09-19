@@ -489,8 +489,11 @@ class WalkthruGui(xbmcgui.WindowXMLDialog):
                 log('Failed to set users timezone: %s' % users_timezone)
                 log(traceback.format_exc())
 
-        # delete skin update block file
-        subprocess.call(['sudo', 'rm', '/tmp/NO_UPDATE'])
+        # delete skin update block file. The /tmp path is where ftr wrote this
+        # before the move to /run/osmc; both are cleared so that an upgrade
+        # landing between ftr setting the flag and this running is handled.
+        subprocess.call(['sudo', 'rm', '-f',
+                         '/run/osmc/no-update', '/tmp/NO_UPDATE'])
 
         self.close()
 

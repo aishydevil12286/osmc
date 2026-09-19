@@ -50,6 +50,6 @@ then
 	if is_rbp && [ -n "$2" ] && dpkg --compare-versions "$2" lt "3.0.678"
 	then
 		/usr/bin/env python3 /usr/share/kodi/addons/script.module.osmcsetting.pi/resources/lib/osmcpi/osmc_reparser.py
-		touch /tmp/reboot-needed
+		osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 	fi
 fi

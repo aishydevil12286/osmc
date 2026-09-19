@@ -82,32 +82,59 @@ mirrors how the critical/major/security fix batches were delivered
 
 ## Move cross-process `/tmp` coordination to `/run/osmc/`
 
-**Status:** Not started
+**Status:** Phase 1 done (cross-package flags), phase 2 outstanding
 **Blocks:** `PrivateTmp=true` on `mediacenter.service` (Kodi)
 
-`/tmp` is currently used as a cross-process IPC and coordination medium,
-which prevents sandboxing Kodi with `PrivateTmp`:
+`/tmp` and `/var/tmp` are used as a cross-process coordination medium,
+which prevents sandboxing Kodi with `PrivateTmp`. `PrivateTmp=true` gives
+a unit a private `/tmp` **and** `/var/tmp`, so setting it on
+`mediacenter.service` severs anything coordinating through either.
 
-| Path | Used by |
-|---|---|
-| `/tmp/osmc.settings.sockfile`, `/tmp/osmc.settings.update.sockfile` | Unix sockets between the Kodi addon and the root update daemon |
-| `/tmp/NO_UPDATE` | written by the `ftr` service, read/removed by the Kodi addon |
-| `/tmp/reboot-needed` | ~17 references across processes |
-| `/tmp/.suppress_osmc_update_checks` | cross-process flag |
+| Path | Used by | Status |
+|---|---|---|
+| `/tmp/reboot-needed` | 15 package maintainer scripts (root) → addon | **done** |
+| `/tmp/NO_UPDATE` | `ftr` first-run scripts (root) → addon | **done** |
+| `/var/tmp/osmc.settings.sockfile` | Unix socket, addon ↔ settings service | outstanding |
+| `/var/tmp/osmc.settings.update.sockfile` | Unix socket, addon ↔ update daemon | outstanding |
+| `/var/tmp/.suppress_osmc_update_checks` | addon (as `osmc`) ↔ `apt_cache_action.py` (as root) | outstanding |
+| `/var/tmp/.osmc_failed_update` | read/removed by the addon | outstanding |
 
-`PrivateTmp=true` gives a unit a private `/tmp` **and** `/var/tmp`, so
-setting it on `mediacenter.service` today would sever all of the above.
+Phase 1 (done) covered the flags written by *other* packages, which is the
+part needing a compatibility window: those writers ship in separate debs
+from their reader, so `/usr/bin/osmc-runtime-flag` mirrors each flag to its
+legacy `/tmp` path while pre-upgrade addon code may still be loaded in the
+running Kodi process.
+
+Phase 2 (outstanding) is the four `/var/tmp` paths above. All are touched
+only within `mediacenter-addon-osmc`, so they upgrade atomically and need
+no compatibility mirror — but the sockets are on the IPC hot path, so they
+are worth landing as their own change.
+
+**`PrivateTmp=true` on `mediacenter.service` cannot be set until phase 2
+lands too.** Once it does, it would have made the WiFi passphrase leak
+fixed in #3 unexploitable by anything outside Kodi.
 
 Two reasons to do this beyond enabling the sandbox:
 
-1. `/tmp` is world-writable, so those sockets are exposed to squatting and
-   symlink attacks by any local process.
+1. `/tmp` and `/var/tmp` are world-writable, so those sockets are exposed
+   to squatting and symlink attacks by any local process.
 2. `/run` is the correct location for runtime state. `/run/osmc/` owned
-   `0750 root:osmc` fixes both problems at once.
+   `0770 root:osmc` fixes both problems at once. Group-write is required,
+   not merely convenient: `.suppress_osmc_update_checks` is written by the
+   addon as `osmc` and removed by `apt_cache_action.py` as root.
 
-Once migrated, `PrivateTmp=true` on `mediacenter.service` becomes safe, and
-would have made the WiFi passphrase leak fixed in #3 unexploitable by
-anything outside Kodi.
+Deliberately left alone:
+
+- `/tmp/.reboot-needed` (note the leading dot) in `networking_gui.py` is
+  written *and* read only within Kodi, so it survives `PrivateTmp`. It is
+  confusingly named next to `/tmp/reboot-needed` but is a different flag.
+- `/tmp/kernel-updated`, written by `kernel-osmc`'s postinst, has no reader
+  anywhere in this repository. It may have an out-of-tree consumer, so it
+  was not migrated on a guess.
+- Paths written and then `sudo mv`-ed by the same process tree
+  (`/tmp/fstab`, `/tmp/guisettings.xml`, `/tmp/end_of_life_message`, …) are
+  not cross-process: a child process inherits the private namespace, so
+  they work unchanged under `PrivateTmp`.
 
 Note `NoNewPrivileges=true` on `mediacenter.service` remains blocked on
 something larger — it would break every `sudo` call the settings addons

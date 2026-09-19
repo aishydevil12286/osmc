@@ -9,5 +9,5 @@ if [ "$1" = "configure" ]; then
 	dd if=/opt/vero5/${UBOOT} of=/dev/mmcblk0 conv=fsync bs=1 count=11
 	dd if=/opt/vero5/${UBOOT} of=/dev/mmcblk0 conv=fsync bs=512 skip=1 seek=1
 	/usr/bin/fw_setenv osmc_defenv true
-	touch /tmp/reboot-needed
+	osmc-runtime-flag set reboot-needed 2>/dev/null || touch /tmp/reboot-needed
 fi
