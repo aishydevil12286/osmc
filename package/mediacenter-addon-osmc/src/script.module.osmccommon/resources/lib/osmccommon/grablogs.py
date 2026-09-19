@@ -67,7 +67,7 @@ RE_MASKS = {
     '04': re.compile(r'(<[pP]ass(?:word)?>)[^<]+(</[pP]ass(?:word)?>)'),  # pass[word]
     '05': re.compile(r'(["\']password["\']:\s*[\'"])[^\'"]+'),  # password
     '06': re.compile(r'(password=).+?(&|$|\|)'),  # password
-    '07': re.compile(r'(\w://.+?:).+?(@\w+)'),  # basic authentication
+    '07': re.compile(r'(\w+://.+?:).+?(@\w+)'),  # basic authentication
     '08': re.compile(r'([aA]ccess[_-]*?[tT]oken=).+?(&|$|\|)'),  # access tokens
     '09': re.compile(r'([xX]-[a-zA-Z]+?-[tT]oken=).+?(&|$|\|)'),  # access tokens (plex/emby)
     '10': re.compile(r'(<setting\s[^>]*password[^>]+>)[^<]+'),  # settings v2.0 values with password
