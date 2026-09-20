@@ -32,7 +32,13 @@ if [ -f /enable_swap ] || [ "$MEMORY" -lt 262144 ]
 then
 	if [ ! -f /swap ]
 	then
-		dd if=/dev/zero of=/swap bs=1M count=128
+		# fallocate is a metadata operation; dd writes 128MB of zeros
+		# to flash on the first low-RAM boot. Keep dd as a fallback
+		# for filesystems that cannot allocate sparsely.
+		if ! fallocate -l 128M /swap 2>/dev/null
+		then
+			dd if=/dev/zero of=/swap bs=1M count=128
+		fi
 		chmod 0600 /swap
 		mkswap /swap
 	fi
