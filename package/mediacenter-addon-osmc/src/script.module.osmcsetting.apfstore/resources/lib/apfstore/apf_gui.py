@@ -15,6 +15,7 @@ from contextlib import closing
 
 import xbmcaddon
 import xbmcgui
+from osmccommon import osmc_paths
 from osmccommon.osmc_language import LangRetriever
 from osmccommon.osmc_logging import StandardLogger
 from osmccommon.osmc_logging import clog
@@ -168,8 +169,7 @@ class APFGui(xbmcgui.WindowXMLDialog):
 
         message = json.dumps(message)
 
-        with closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)) as open_socket:
-            open_socket.connect('/var/tmp/osmc.settings.update.sockfile')
+        with closing(osmc_paths.connect(osmc_paths.UPDATE_SOCKET_PATHS)) as open_socket:
             if not isinstance(message, (bytes, bytearray)):
                 message = message.encode('utf-8', 'ignore')
             open_socket.sendall(message)
