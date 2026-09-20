@@ -169,7 +169,7 @@ class OSMCBackup(object):
 
         if not os.path.exists(LOCAL_BACKUP_TEMP):
             try:
-                subprocess.Popen(['sudo', 'mkdir', LOCAL_BACKUP_TEMP])
+                subprocess.check_call(['sudo', 'mkdir', '-p', LOCAL_BACKUP_TEMP])
             except:
                 log(traceback.format_exc())
                 pass
@@ -189,7 +189,7 @@ class OSMCBackup(object):
 
         if not os.path.exists(LOCAL_RESTORE_TEMP):
             try:
-                subprocess.Popen(['sudo', 'mkdir', LOCAL_RESTORE_TEMP])
+                subprocess.check_call(['sudo', 'mkdir', '-p', LOCAL_RESTORE_TEMP])
             except:
                 log(traceback.format_exc())
                 pass
@@ -380,7 +380,7 @@ class OSMCBackup(object):
             log('Failed to delete temporary %s' % destination_location)
 
         try:
-            subprocess.Popen(['cp', '-rf', source_location, destination_location])
+            subprocess.check_call(['cp', '-rf', source_location, destination_location])
 
             log('%s successfully copied to %s' % (source_location, destination_location))
 
@@ -396,7 +396,7 @@ class OSMCBackup(object):
         if destination_location.endswith('/') and not os.path.isdir(destination_location):
             try:
                 if sudo:
-                    subprocess.Popen(['sudo', 'mkdir', destination_location])
+                    subprocess.check_call(['sudo', 'mkdir', '-p', destination_location])
                 else:
                     os.mkdir(destination_location)
             except:
@@ -405,9 +405,9 @@ class OSMCBackup(object):
 
         try:
             if sudo:
-                subprocess.Popen(['sudo', 'mv', source_location, destination_location])
+                subprocess.check_call(['sudo', 'mv', source_location, destination_location])
             else:
-                subprocess.Popen(['mv', source_location, destination_location])
+                subprocess.check_call(['mv', source_location, destination_location])
 
         except:
             log(traceback.format_exc())
@@ -459,7 +459,8 @@ class OSMCBackup(object):
         new_root = xbmcvfs.translatePath('special://home')
 
         try:
-            with tarfile.open(name=local_tarball_name, mode="w:gz") as tar:
+            with tarfile.open(name=local_tarball_name, mode="w:gz",
+                              compresslevel=3) as tar:
                 for name, size in self.backup_candidates:
                     # if the user wants to backup the fstab file, then copy it to userdata
                     base_name = [f for f in name.split('/') if f][-1]
@@ -499,7 +500,8 @@ class OSMCBackup(object):
                         'message': '%s' % name
                     })
 
-                    xbmc.sleep(150)  # sleep for 150ms to resolve invalid FileNotFound
+                    if not os.path.exists(name):
+                        xbmc.sleep(150)  # brief wait if a just-copied file is not visible yet
 
                     try:
                         new_path = os.path.relpath(name, new_root)
@@ -547,13 +549,16 @@ class OSMCBackup(object):
             if not success:
                 log('Failed to copy {local} to {remote} using xbmcvfs.copy'
                     .format(local=local_tarball_name, remote=remote_tarball_name))
-                log('Copying {local} to {remote} using subprocess.Popen'
+                log('Copying {local} to {remote} using subprocess.check_call'
                     .format(local=local_tarball_name, remote=remote_tarball_name))
-                subprocess.Popen(['cp', local_tarball_name, remote_tarball_name])
-                xbmc.sleep(300)
-                success = xbmcvfs.exists(remote_tarball_name)
+                try:
+                    subprocess.check_call(['cp', local_tarball_name, remote_tarball_name])
+                    xbmc.sleep(300)
+                    success = xbmcvfs.exists(remote_tarball_name)
+                except Exception:
+                    success = False
                 if not success:
-                    log('Failed to copy {local} to {remote} using subprocess.Popen'
+                    log('Failed to copy {local} to {remote} using subprocess.check_call'
                         .format(local=local_tarball_name, remote=remote_tarball_name))
 
             if success:
