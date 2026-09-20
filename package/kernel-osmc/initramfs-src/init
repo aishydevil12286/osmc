@@ -38,7 +38,18 @@ OPTION_ROOTDELAY="0"
 OPTION_FILESYSTEM="ext4"
 OPTION_INIT="/sbin/splash_early"
 # Each concatenated mount option should have a leading comma.
-OPTION_MOUNT_OPTIONS=""
+#
+# noatime: the root filesystem lives on SD or eMMC on every platform we
+# ship. Without it the kernel default of relatime writes back an access
+# time for any file read whose atime is over a day old, so a media library
+# scan turns thousands of reads into thousands of metadata writes - the
+# worst case for flash, which has poor small-write performance and a
+# limited erase budget. Nothing on an OSMC system reads atime.
+#
+# The fstab written by the installer already asks for noatime, but for
+# anything other than an Apple TV the root entry there is commented out
+# because this initramfs does the mount, so it never took effect.
+OPTION_MOUNT_OPTIONS=",noatime"
 OPTION_MOUNT_PATH="/real_root"
 OPTION_NFS_IP_TYPE="dhcp"
 OPTION_REBOOT_ON_ROOT_FS_ERROR="0"
