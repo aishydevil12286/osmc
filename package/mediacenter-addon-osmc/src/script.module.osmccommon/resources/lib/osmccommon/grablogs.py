@@ -58,6 +58,10 @@ USERDATA = '/home/osmc/.kodi/userdata/'
 TEMP_LOG_FILENAME = 'uploadlog.txt'
 TEMP_LOG_FILE = '/var/tmp/' + TEMP_LOG_FILENAME
 UPLOAD_LOC = 'https://paste.osmc.tv'
+# Cap the combined log so a stuck journal or huge kodi.log cannot fill
+# the SD card or the pastebin. 8MB is well under typical paste limits.
+MAX_LOG_BYTES = 8 * 1024 * 1024
+TRUNCATION_NOTICE = '\n[grab-logs truncated: output exceeded %d bytes]\n' % MAX_LOG_BYTES
 
 RE_MASKS = {
     '00': re.compile(r'((?:OAuth|Bearer)\s)[^\'"]+'),  # oauth tokens
@@ -628,16 +632,29 @@ class CommandLine(object):
         self.command_list = command_list
 
     def readlines(self):
-        ps = subprocess.Popen((''), shell=True)
-        while '|' in self.command_list:
-            idx = self.command_list.index('|')
-            chunk, self.command_list = self.command_list[:idx], self.command_list[idx + 1:]
-            ps = subprocess.Popen(chunk, stdin=ps.stdout, stdout=subprocess.PIPE)
+        remaining = list(self.command_list)
+        stages = []
+        while '|' in remaining:
+            idx = remaining.index('|')
+            stages.append(remaining[:idx])
+            remaining = remaining[idx + 1:]
+        stages.append(remaining)
 
-        res = subprocess.check_output(self.command_list, stdin=ps.stdout)
-        res = res.decode('utf-8')
-
-        return res
+        procs = []
+        prev_stdout = None
+        try:
+            for i, cmd in enumerate(stages):
+                if i == len(stages) - 1:
+                    output = subprocess.check_output(cmd, stdin=prev_stdout)
+                    return output.decode('utf-8')
+                proc = subprocess.Popen(cmd, stdin=prev_stdout, stdout=subprocess.PIPE)
+                procs.append(proc)
+                prev_stdout = proc.stdout
+        finally:
+            for proc in procs:
+                if proc.stdout:
+                    proc.stdout.close()
+                proc.wait()
 
 
 class CommandLineInterface(object):
@@ -782,6 +799,7 @@ class Main(object):
         self.termprint = termprint
 
         self.log_file = None  # handle the collected logs are streamed into
+        self.bytes_written = 0
 
         self.url = ''
 
@@ -984,12 +1002,11 @@ class Main(object):
 
     def write_to_screen(self):
         with open(TEMP_LOG_FILE, 'rb') as f:
-            lines = f.readlines()
-
-        lines = [line.decode('utf-8') if isinstance(line, bytes) else line for line in lines]
-        screen_dump = ''.join(lines)
-
-        print(screen_dump)
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                sys.stdout.write(chunk.decode('utf-8', 'replace'))
 
     def open_temp_file(self):
         """ Clears any previous log and opens the temporary file for writing.
@@ -1002,11 +1019,13 @@ class Main(object):
         print('Writing logs to temp file ...')
 
         if os.path.isfile(TEMP_LOG_FILE):
+            try:
+                os.remove(TEMP_LOG_FILE)
+            except OSError:
+                subprocess.call(['sudo', 'rm', '-f', TEMP_LOG_FILE])
+
             slept = 0
             sleep_inc = 0.5
-            with os.popen('sudo rm %s' % TEMP_LOG_FILE) as _:
-                pass
-
             while slept <= 3:
                 if not os.path.isfile(TEMP_LOG_FILE):
                     break
@@ -1015,6 +1034,7 @@ class Main(object):
 
         try:
             self.log_file = open(TEMP_LOG_FILE, 'wb')
+            self.bytes_written = 0
             return True
 
         except:
@@ -1034,6 +1054,7 @@ class Main(object):
             log('Failed to close temporary log %s' % TEMP_LOG_FILE)
 
         self.log_file = None
+        self.bytes_written = 0
 
     def _write(self, text):
         """ Writes a chunk of the log out, stripping the characters that
@@ -1041,8 +1062,19 @@ class Main(object):
         if not self.log_file or not hasattr(text, 'replace'):
             return
 
+        if self.bytes_written >= MAX_LOG_BYTES:
+            return
+
         text = text.replace('\0', '').replace('\ufeff', '')
-        self.log_file.write(text.encode('utf-8'))
+        encoded = text.encode('utf-8')
+        remaining = MAX_LOG_BYTES - self.bytes_written
+        if len(encoded) > remaining:
+            notice = TRUNCATION_NOTICE.encode('utf-8')
+            keep = max(0, remaining - len(notice))
+            encoded = encoded[:keep] + notice
+
+        self.log_file.write(encoded)
+        self.bytes_written += len(encoded)
 
     def dispatch_logs(self):
         """ Either copies the combined logs to the /boot directory or Uploads them to the pastebin. """
@@ -1054,7 +1086,7 @@ class Main(object):
                 lang(32001), '' if not xbmc else lang(32009) % ('/boot/' + TEMP_LOG_FILENAME)
             )
 
-            os.popen('sudo cp -rf %s /boot/' % TEMP_LOG_FILE)
+            subprocess.call(['sudo', 'cp', '-rf', TEMP_LOG_FILE, '/boot/'])
 
             self.progress_dialog.update(percent=100, message=lang(32008))
 
@@ -1084,10 +1116,8 @@ class Main(object):
             for attempt in attempts:
                 pct += step_pct
                 try:
-                    with os.popen('%s "%s" %s/documents' %
-                                  (attempt, TEMP_LOG_FILE, UPLOAD_LOC)) as open_file:
-
-                        response = open_file.read()
+                    cmd = shlex.split(attempt) + [TEMP_LOG_FILE, UPLOAD_LOC + '/documents']
+                    response = subprocess.check_output(cmd).decode('utf-8')
 
                     key = None
                     try:
@@ -1148,7 +1178,7 @@ class Main(object):
                     log("Failed to upload log files, copying to /boot instead. (Unable to verify)")
 
                 if self.copy_to_boot:
-                    os.popen('sudo cp -rf %s /boot/' % TEMP_LOG_FILE)
+                    subprocess.call(['sudo', 'cp', '-rf', TEMP_LOG_FILE, '/boot/'])
 
             else:
 
