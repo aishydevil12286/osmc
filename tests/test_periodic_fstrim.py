@@ -21,10 +21,18 @@
     rejected: it issues discards inline and generally hurts latency on the
     cheap flash these devices use. Periodic fstrim is the recommended shape.
 
+    Whether a card supports discard cannot be told from its model name -
+    families like SanDisk Ultra and Samsung EVO span many years and
+    controller revisions - so /usr/bin/osmc-supports-discard asks the device,
+    and an ExecCondition= drop-in runs it at each firing. Deciding this at
+    run time rather than install time matters because the card can be
+    swapped, or root moved to USB, long afterwards.
+
     Run with: python3 tests/test_periodic_fstrim.py
 """
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -33,6 +41,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POSTINST = REPO_ROOT / "package/base-files-osmc/files/DEBIAN/postinst"
 PERFTUNE = REPO_ROOT / "package/perftune-osmc/files/usr/bin/performance_tuner"
+HELPER = (REPO_ROOT /
+          "package/base-files-osmc/files/usr/bin/osmc-supports-discard")
+DROPIN = (REPO_ROOT / "package/base-files-osmc/files/etc/systemd/system"
+                      "/fstrim.service.d/osmc-discard-check.conf")
 
 
 class TestTimerIsEnabled(unittest.TestCase):
@@ -129,6 +141,153 @@ class TestVeroBootTimeTrimUntouched(unittest.TestCase):
         result = subprocess.run(['sh', '-n', str(PERFTUNE)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestDiscardHelper(unittest.TestCase):
+    """Executes the real helper against a controlled sysfs tree, so both
+    answers are covered without needing hardware that gives each one."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loop_device = None
+        cls.mount_point = None
+
+        if os.geteuid() != 0 or not shutil.which('mkfs.ext4'):
+            return
+
+        work = tempfile.mkdtemp()
+        cls.work = work
+        image = os.path.join(work, 'fs.img')
+        point = os.path.join(work, 'mp')
+        os.mkdir(point)
+
+        subprocess.run(['dd', 'if=/dev/zero', 'of=' + image, 'bs=1M',
+                        'count=16', 'status=none'], check=True)
+        subprocess.run(['mkfs.ext4', '-q', image], check=True,
+                       capture_output=True)
+
+        attached = subprocess.run(['losetup', '--find', '--show', image],
+                                  capture_output=True, text=True)
+        if attached.returncode != 0:
+            return
+
+        device = attached.stdout.strip()
+        if subprocess.run(['mount', device, point],
+                          capture_output=True).returncode != 0:
+            subprocess.run(['losetup', '-d', device], capture_output=True)
+            return
+
+        cls.loop_device = device
+        cls.mount_point = point
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.mount_point:
+            subprocess.run(['umount', cls.mount_point], capture_output=True)
+        if cls.loop_device:
+            subprocess.run(['losetup', '-d', cls.loop_device],
+                           capture_output=True)
+        if getattr(cls, 'work', None):
+            shutil.rmtree(cls.work, ignore_errors=True)
+
+    def run_helper(self, discard_value):
+        """Run the helper with a fake sysfs reporting discard_value.
+
+        discard_value of None means the queue entry is absent entirely.
+        """
+        if not self.mount_point:
+            self.skipTest('needs root, losetup and mkfs.ext4')
+
+        sysfs = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, sysfs, True)
+
+        name = os.path.basename(self.loop_device)
+        queue = os.path.join(sysfs, name, 'queue')
+
+        if discard_value is not None:
+            os.makedirs(queue)
+            with open(os.path.join(queue, 'discard_max_bytes'), 'w') as f:
+                f.write('%s\n' % discard_value)
+        else:
+            os.makedirs(os.path.join(sysfs, name))
+
+        env = dict(os.environ, OSMC_SYSFS_BLOCK=sysfs)
+        return subprocess.run(['sh', str(HELPER), self.mount_point],
+                              capture_output=True, text=True, env=env)
+
+    def test_helper_is_executable(self):
+        self.assertTrue(os.access(HELPER, os.X_OK),
+                        'the helper must ship with the exec bit set')
+
+    def test_helper_parses(self):
+        result = subprocess.run(['sh', '-n', str(HELPER)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_supported_device_exits_zero(self):
+        result = self.run_helper(4294966784)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('supports discard', result.stdout)
+
+    def test_unsupported_device_exits_nonzero(self):
+        result = self.run_helper(0)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('does not support discard', result.stdout)
+
+    def test_missing_queue_entry_is_not_fatal(self):
+        result = self.run_helper(None)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('no discard information', result.stdout)
+
+    def test_malformed_value_is_not_fatal(self):
+        result = self.run_helper('not-a-number')
+        self.assertEqual(result.returncode, 1)
+
+    def test_non_block_filesystem_is_skipped(self):
+        result = subprocess.run(['sh', str(HELPER), '/proc'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('not a block device', result.stdout)
+
+    def test_unknown_target_is_not_fatal(self):
+        result = subprocess.run(['sh', str(HELPER), '/no/such/path'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+
+    def test_every_failure_exits_inside_the_skip_range(self):
+        """ExecCondition= treats 1-254 as 'skip this unit'. 255 or a signal
+        marks it failed, which is exactly what this drop-in avoids."""
+        for target in ('/proc', '/no/such/path'):
+            with self.subTest(target=target):
+                result = subprocess.run(['sh', str(HELPER), target],
+                                        capture_output=True, text=True)
+                self.assertGreaterEqual(result.returncode, 1)
+                self.assertLessEqual(result.returncode, 254)
+
+
+class TestDropIn(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = DROPIN.read_text()
+
+    def test_dropin_targets_fstrim_service(self):
+        self.assertEqual(DROPIN.parent.name, 'fstrim.service.d')
+
+    def test_dropin_uses_exec_condition(self):
+        """ExecCondition, not ExecStartPre: the former skips the unit, the
+        latter fails it."""
+        self.assertIn('ExecCondition=/usr/bin/osmc-supports-discard',
+                      self.text)
+        self.assertNotIn('ExecStartPre', self.text)
+
+    def test_dropin_declares_a_service_section(self):
+        self.assertIn('[Service]', self.text)
+
+    def test_helper_path_in_dropin_matches_where_it_ships(self):
+        shipped = '/' + str(HELPER.relative_to(
+            REPO_ROOT / 'package/base-files-osmc/files'))
+        self.assertIn('ExecCondition=' + shipped, self.text)
 
 
 if __name__ == '__main__':
