@@ -27,19 +27,39 @@ def argv():
     return sys.argv
 
 
+_last_progress = {
+    'when': None,
+    'percent': None,
+    'heading': None,
+    'message': None,
+}
+PROGRESS_MIN_INTERVAL_S = 1.0
+
+
 def call_parent(raw_message, data=None):
-    print('%s %s sending response' % (datetime.now(), 'apt_cache_action.py'))
+    # Each send is a new connect/sendall/close. The parent reads to EOF, so
+    # a persistent connection would stall the listener. Coalesce duplicate
+    # progress pulses instead of opening a socket for every apt callback.
     if data is None:
         data = {}
 
-    message = (raw_message, data)
-    message = json.dumps(message)
+    if raw_message == 'progress_bar':
+        now = datetime.now()
+        key = (data.get('percent'), data.get('heading'), data.get('message'))
+        last = _last_progress
+        if (last['when'] is not None
+                and key == (last['percent'], last['heading'], last['message'])
+                and (now - last['when']).total_seconds() < PROGRESS_MIN_INTERVAL_S):
+            return 'coalesced'
+        last['when'] = now
+        last['percent'], last['heading'], last['message'] = key
+
+    message = json.dumps((raw_message, data))
 
     try:
         with closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)) as open_socket:
             open_socket.connect('/var/tmp/osmc.settings.update.sockfile')
-            message = message.encode('utf-8')
-            open_socket.sendall(message)
+            open_socket.sendall(message.encode('utf-8'))
 
     except Exception as e:
         return '%s %s failed to connect to parent - %s' % \
@@ -462,15 +482,6 @@ class DownloadProgress(apt.progress.base.AcquireProgress):
 
         else:
             self.pulse_time = datetime.now()
-
-            print('Pulse ===========================================')
-            print('current_items', self.current_items)
-            print('total_items', self.total_items)
-            print('total_bytes', self.total_bytes)
-            print('fetched_bytes', self.fetched_bytes)
-            print('current_bytes', self.current_bytes)
-            print('current_cps', self.current_cps)
-            print('Pulse ===========================================')
 
             if self.total_bytes == 0:
                 # Protecting against division by 0.
