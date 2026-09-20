@@ -3,9 +3,8 @@
     Tests for periodic TRIM being enabled on every platform.
 
     SD cards and eMMC lose sustained write performance as unused blocks
-    accumulate untrimmed. Only Vero was getting a discard pass - perftune's
-    performance_tuner runs `fstrim -v /` at boot, inside a block gated on
-    osmcdev being vero2 or vero3. Pi never got one.
+    accumulate untrimmed. Vero used to get a discard pass at boot via
+    perftune; that is now left to fstrim.timer on every platform.
 
     Rather than widening that condition, base-files-osmc now enables
     util-linux's fstrim.timer:
@@ -122,20 +121,22 @@ class TestGuardBehaviour(unittest.TestCase):
         self.assertIn('DONE', output, 'the postinst must carry on regardless')
 
 
-class TestVeroBootTimeTrimUntouched(unittest.TestCase):
-    """The existing Vero behaviour is deliberately left alone - it is not
-    testable from here, and the timer is harmless alongside it."""
+class TestVeroBootTimeTrimRemoved(unittest.TestCase):
+    """Weekly fstrim.timer now covers every platform, including Vero.
+    The boot-time TRIM sat behind sleep 30 and ran on top of Kodi
+    starting up; drop it so boot I/O is not doubled."""
 
     @classmethod
     def setUpClass(cls):
         cls.text = PERFTUNE.read_text()
 
-    def test_perftune_still_trims_on_vero(self):
-        self.assertIn('fstrim -v /', self.text)
+    def test_perftune_no_longer_trims_at_boot(self):
+        self.assertNotIn('fstrim', self.text)
 
-    def test_perftune_condition_is_unchanged(self):
+    def test_vero_gpu_freq_tweak_is_kept(self):
         self.assertIn('[ "$OPTION_OSMCDEV" = "vero2" ] || '
                       '[ "$OPTION_OSMCDEV" = "vero3" ]', self.text)
+        self.assertIn('mpgpu/cur_freq', self.text)
 
     def test_perftune_parses(self):
         result = subprocess.run(['sh', '-n', str(PERFTUNE)],
