@@ -14,6 +14,7 @@ import os
 import random
 import socket
 import subprocess
+import time
 import traceback
 from datetime import datetime
 from io import open
@@ -243,7 +244,12 @@ class Main(object):
 
         # change this to 'apt' to give the user the option to clean the apt files
         self.freespace_remedy = 'reboot'
-        self.freespace_supressor = 172200
+        # First check five minutes after boot, then daily. The previous tick
+        # counter started at 172200 and needed to exceed 172800, but was
+        # never incremented, so the check never ran.
+        self.freespace_first_check_after = time.time() + 300
+        self.freespace_interval = 86400
+        self.last_freespace_check = 0
 
         self.keep_alive = True
         # keep alive method
@@ -1346,28 +1352,33 @@ class Main(object):
             Daily checker of free space on /. Notifies user in Home window when there is
             less than 50mb remaining.
         """
-        if self.freespace_supressor > 172800:
-            self.freespace_supressor = 0
+        now = time.time()
+        if now < self.freespace_first_check_after:
+            return
+        if self.last_freespace_check and now - self.last_freespace_check < self.freespace_interval:
+            return
 
-            freespace, value = self.check_target_location_for_size(location='/', requirement=250)
-            if not freespace:
-                if 'Home.xml' in xbmc.getInfoLabel('Window.Property(xmlfile)'):
-                    if self.freespace_remedy == 'apt':
-                        # THIS SECTION IS CURRENTLY DISABLED
-                        # TO ENABLE IT CHANGE THE INIT FREESPACE_REMEDY TO 'apt'
-                        resp = DIALOG.yesno(self.lang(32136),
-                                            '[CR]'.join([self.lang(32142) % int(value),
-                                                         self.lang(32143)]))
+        self.last_freespace_check = now
 
-                        if resp:
-                            subprocess.Popen(['sudo', 'apt-get', 'autoremove', '&&',
-                                              'apt-get', 'clean'])
+        freespace, value = self.check_target_location_for_size(location='/', requirement=250)
+        if not freespace:
+            if 'Home.xml' in xbmc.getInfoLabel('Window.Property(xmlfile)'):
+                if self.freespace_remedy == 'apt':
+                    # THIS SECTION IS CURRENTLY DISABLED
+                    # TO ENABLE IT CHANGE THE INIT FREESPACE_REMEDY TO 'apt'
+                    resp = DIALOG.yesno(self.lang(32136),
+                                        '[CR]'.join([self.lang(32142) % int(value),
+                                                     self.lang(32143)]))
 
-                            self.freespace_remedy = 'reboot'
-                            # wait 10 minutes before next space check
-                            self.freespace_supressor = 171600
+                    if resp:
+                        subprocess.Popen(['sudo', 'sh', '-c',
+                                          'apt-get autoremove && apt-get clean'])
 
-                    else:
-                        _ = DIALOG.ok(self.lang(32136),
-                                      '[CR]'.join([self.lang(32142) % int(value),
-                                                   self.lang(32144)]))
+                        self.freespace_remedy = 'reboot'
+                        # wait 10 minutes before next space check
+                        self.last_freespace_check = now - self.freespace_interval + 600
+
+                else:
+                    _ = DIALOG.ok(self.lang(32136),
+                                  '[CR]'.join([self.lang(32142) % int(value),
+                                               self.lang(32144)]))
