@@ -35,6 +35,26 @@ if [ "$1" = "configure" ]; then
 	systemd-tmpfiles --create /usr/lib/tmpfiles.d/osmc.conf 2>/dev/null || true
 
 	systemctl daemon-reload
+
+	# Periodic TRIM. SD cards and eMMC lose sustained write performance as
+	# unused blocks accumulate untrimmed, and until now only Vero got a
+	# discard pass (perftune runs fstrim at boot there); Pi never did.
+	#
+	# util-linux already ships fstrim.timer - weekly, with Persistent=true
+	# so it catches up after the box has been off - which covers every
+	# platform without adding anything to the boot path. A first TRIM on a
+	# long-lived card can take a while and is heavy on I/O, so a boot-time
+	# pass would land right on top of Kodi starting up.
+	#
+	# Guarded because the unit only exists if util-linux provides it, and a
+	# failed enable must not fail the package. Deliberately not started
+	# here: Persistent=true means a first run would fire during this apt
+	# transaction, so it waits for the next boot.
+	if [ -f /lib/systemd/system/fstrim.timer ] || \
+	   [ -f /usr/lib/systemd/system/fstrim.timer ]; then
+		systemctl enable fstrim.timer >/dev/null 2>&1 || true
+	fi
+
 	systemctl enable osmc-prune-devel.timer
 	systemctl enable osmc-id-generator.service osmc-report-stats.timer
 	systemctl start osmc-id-generator.service osmc-report-stats.timer
