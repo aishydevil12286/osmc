@@ -39,8 +39,12 @@ if [ -f /lib/firmware/edid ]; then
 fi
 
 # fix 4k resolutions on V fb
-find /home/osmc/.kodi -type f -name "guisettings.xml" -print0 | while read -d $'\0' file
+# Only the real settings files - a recursive find of ~/.kodi walks every
+# addon and thumbnail on every start.
+for file in /home/osmc/.kodi/userdata/guisettings.xml \
+            /home/osmc/.kodi/userdata/profiles/*/guisettings.xml
 do
+    [ -f "$file" ] || continue
     grep -Pzl '(<description>3840)(.*\n){6}(.*right>[0-2][0-9]{3}.*\n)' "$file" >/dev/null
 	if [ $? -eq 0 ] ;
 	then
