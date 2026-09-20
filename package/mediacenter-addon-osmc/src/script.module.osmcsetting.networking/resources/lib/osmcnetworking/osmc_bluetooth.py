@@ -138,6 +138,10 @@ class OSMCBluetooth:
         return bluetooth.get_device_property(device_address, key)
 
     @staticmethod
+    def get_device_properties(device_address):
+        return bluetooth.get_device_properties(device_address)
+
+    @staticmethod
     def set_device_property(device_address, key, value):
         bluetooth.set_device_property(device_address, key, value)
 

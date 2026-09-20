@@ -76,12 +76,22 @@ def get_device_interface(device_address):
                           "org.freedesktop.DBus.Properties")
 
 
-def get_device_property(device_address, key):
-    device = get_device_interface(device_address)
-    value = device.Get(BLUEZ_DEVICE, key)
+def _coerce_bluez_value(value):
     if isinstance(value, dbus.Boolean):
         return bool(value)
     return value
+
+
+def get_device_property(device_address, key):
+    device = get_device_interface(device_address)
+    return _coerce_bluez_value(device.Get(BLUEZ_DEVICE, key))
+
+
+def get_device_properties(device_address):
+    """One Properties.GetAll instead of a Get per field."""
+    device = get_device_interface(device_address)
+    props = device.GetAll(BLUEZ_DEVICE)
+    return {str(key): _coerce_bluez_value(value) for key, value in props.items()}
 
 
 def set_device_property(device_address, key, value):

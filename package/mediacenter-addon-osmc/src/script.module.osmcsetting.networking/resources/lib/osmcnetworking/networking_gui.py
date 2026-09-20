@@ -13,6 +13,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 import traceback
 from io import open
 
@@ -33,6 +34,18 @@ DIALOG = xbmcgui.Dialog()
 WIFI_THREAD_NAME = 'wifi_population_thread'
 BLUETOOTH_THREAD_NAME = 'bluetooth_population_thread'
 WIFI_SCAN_THREAD_NAME = 'wifi_scan_thread'
+
+# How often the populate threads wake to notice an exit request. 10ms
+# was a busy-wait: 100 wakeups/s while the panel is open. 250ms is
+# still snappy for closing the dialog.
+THREAD_POLL_MS = 250
+# How often to wait for those threads to die on dialog close.
+THREAD_JOIN_POLL_MS = 100
+# How often the on-screen lists are rebuilt from connman/bluez.
+LIST_REFRESH_S = 2.0
+# How often to kick off a fresh WiFi scan. The previous `runs % 600`
+# with a 10ms sleep was ~6s, despite the comment saying "every minute".
+WIFI_RESCAN_S = 60.0
 
 GUI_IDS = {
 
@@ -485,7 +498,7 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
             log("Wifi Thread " + str(wifi_thread))
             log("Wifi Scan  Thread " + str(wifi_scan_thread))
             log("BT Scan Thread " + str(bluetooth_thread))
-            xbmc.sleep(10)
+            xbmc.sleep(THREAD_JOIN_POLL_MS)
             wifi_thread = self.is_thread_running(WIFI_THREAD_NAME)
             wifi_scan_thread = self.is_thread_running(WIFI_SCAN_THREAD_NAME)
             bluetooth_thread = self.is_thread_running(BLUETOOTH_THREAD_NAME)
@@ -1879,21 +1892,22 @@ class BluetoothPopulationThread(threading.Thread):
         return self._osmc_bluetooth
 
     def run(self):
-        runs = 0
+        last_refresh = 0
+        last_debug = 0
         while not self.exit:
-            # update gui every 2 seconds
-            if runs % 200 == 0 and not self.exit:
+            now = time.time()
+            if now - last_refresh >= LIST_REFRESH_S and not self.exit:
                 self.update_bluetooth_lists()
+                last_refresh = now
 
-            # every 4 seconds output debug info
-            if runs % 400 == 0 and not self.exit:
+            if now - last_debug >= (LIST_REFRESH_S * 2) and not self.exit:
                 log('-- DISCOVERED ---')
                 log(self.discovered_dict)
                 log('-- TRUSTED --')
                 log(self.trusted_dict)
+                last_debug = now
 
-            xbmc.sleep(10)
-            runs += 1
+            xbmc.sleep(THREAD_POLL_MS)
 
     def update_bluetooth_lists(self):
         self.trusted_dict = self.populate_bluetooth_dict(True)
@@ -1972,11 +1986,15 @@ class BluetoothPopulationThread(threading.Thread):
             pass
 
         for address in devices.keys():
+            try:
+                props = self.osmc_bluetooth.get_device_properties(address)
+            except Exception:
+                props = {}
             bluetooth_dict[address] = {
-                'alias': self.osmc_bluetooth.get_device_property(address, 'Alias'),
-                'paired': self.osmc_bluetooth.get_device_property(address, 'Paired'),
-                'connected': self.osmc_bluetooth.get_device_property(address, 'Connected'),
-                'trusted': self.osmc_bluetooth.get_device_property(address, 'Trusted'),
+                'alias': props.get('Alias', address),
+                'paired': bool(props.get('Paired', False)),
+                'connected': bool(props.get('Connected', False)),
+                'trusted': bool(props.get('Trusted', False)),
             }
         return bluetooth_dict
 
@@ -2019,27 +2037,27 @@ class WIFIPopulateBot(threading.Thread):
 
     def run(self):
         running_dict = {}
-        runs = 0
+        last_refresh = 0
+        last_scan = 0
 
         while not self.exit:
-            # only run the network check every 2 seconds, but allow the
-            # exit command to be checked every 10ms
-            if runs % 200 == 0 and not self.exit:
+            now = time.time()
+            if now - last_refresh >= LIST_REFRESH_S and not self.exit:
                 log('Updating Wifi networks')
                 wifis = osmc_network.get_wifi_networks()
 
                 running_dict.update(wifis)
 
                 self.update_list_control(running_dict, len(wifis.keys()) > 1)
+                last_refresh = now
 
-            # every minute re-scan wifi unless the thread has been asked to exit
-            if not self.exit and runs % 600 == 0:
+            if not self.exit and now - last_scan >= WIFI_RESCAN_S:
                 self.wifi_scanner_bot = WIFIScannerBot()
                 self.wifi_scanner_bot.daemon = True
                 self.wifi_scanner_bot.start()
+                last_scan = now
 
-            xbmc.sleep(10)
-            runs += 1
+            xbmc.sleep(THREAD_POLL_MS)
 
     def stop_thread(self):
         self.exit = True
