@@ -448,12 +448,21 @@ class Main(object):
         except Exception as e:
             log(e, 'an EXCEPTION occurred')
 
+    def _apt_helper_cmd(self, *args):
+        """Run the root apt helper at idle I/O and CPU priority.
+
+        Package fetch sits on the same flash and cores as Kodi; nice/ionice
+        keep library playback from hitching during a background check.
+        """
+        return ['sudo', 'nice', '-n', '19', 'ionice', '-c3', 'python3',
+                os.path.join(self.lib_path, 'apt_cache_action.py')] + list(args)
+
     def call_child_script(self, action):
         # check whether the install is an alpha version
         if self.check_for_unsupported_version() == 'alpha':
             return
 
-        subprocess.Popen(['sudo', 'python3', os.path.join(self.lib_path, 'apt_cache_action.py'), action])
+        subprocess.Popen(self._apt_helper_cmd(action))
 
     def position_icon(self):
         """
@@ -726,8 +735,7 @@ class Main(object):
         # check for sufficient space, only proceed if it is available
         root_space, _ = self.check_target_location_for_size(location='/', requirement=300)
         if root_space:
-            subprocess.Popen(['sudo', 'python3', os.path.join(self.lib_path, 'apt_cache_action.py'),
-                              'action_list', action])
+            subprocess.Popen(self._apt_helper_cmd('action_list', action))
 
         else:
             _ = DIALOG.ok(self.lang(32077), '[CR]'.join([self.lang(32129), self.lang(32130)]))
