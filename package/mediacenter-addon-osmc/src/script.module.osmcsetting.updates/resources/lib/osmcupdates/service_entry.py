@@ -14,6 +14,7 @@ import os
 import random
 import socket
 import subprocess
+import time
 import traceback
 from datetime import datetime
 from io import open
@@ -37,6 +38,13 @@ except ImportError:
 
 ADDON_ID = 'script.module.osmcsetting.updates'
 DIALOG = xbmcgui.Dialog()
+
+# The daemon used to poll twice a second for the life of Kodi. The
+# scheduler only needs minute granularity; 2Hz was for the IPC queue and
+# the holding pattern. Idle machines now sleep longer; busy states keep
+# the half-second cadence.
+DAEMON_IDLE_WAIT_S = 2.0
+DAEMON_BUSY_WAIT_S = 0.5
 
 # Files whose existence means an installed package requires a reboot.
 #
@@ -243,7 +251,12 @@ class Main(object):
 
         # change this to 'apt' to give the user the option to clean the apt files
         self.freespace_remedy = 'reboot'
-        self.freespace_supressor = 172200
+        # First check five minutes after boot, then daily. The previous tick
+        # counter started at 172200 and needed to exceed 172800, but was
+        # never incremented, so the check never ran.
+        self.freespace_first_check_after = time.time() + 300
+        self.freespace_interval = 86400
+        self.last_freespace_check = 0
 
         self.keep_alive = True
         # keep alive method
@@ -302,7 +315,7 @@ class Main(object):
                 break
 
             # this controls the frequency of the instruction processing
-            if self.monitor.waitForAbort(0.5):
+            if self.monitor.waitForAbort(self._daemon_wait_seconds()):
                 break
 
         self.exit_procedure()
@@ -384,38 +397,47 @@ class Main(object):
         # stop the listener
         self.listener.stop()
 
+    def _daemon_wait_seconds(self):
+        """Half a second while work is in flight; two seconds when idle."""
+        if (self.function_holding_pattern
+                or self.try_image_position_again
+                or not self.parent_queue.empty()):
+            return DAEMON_BUSY_WAIT_S
+        return DAEMON_IDLE_WAIT_S
+
     def check_action_queue(self):
         """
-            Checks the queue for data, if present it calls the appropriate method and
-            supplies the data
+            Drain the queue. The previous loop processed one message per
+            daemon tick, so a burst of apt progress updates sat until the
+            next 0.5s wake-up, one at a time.
         """
-        try:
-            # the only thing the script should be sent is a tuple
-            # ('instruction as string', data as dict), everything else is ignored
-            raw_comm_from_script = self.parent_queue.get(False)
+        while True:
+            try:
+                # the only thing the script should be sent is a tuple
+                # ('instruction as string', data as dict), everything else is ignored
+                raw_comm_from_script = self.parent_queue.get(False)
 
-            # tell the queue that we are done with the task at hand
-            self.parent_queue.task_done()
+                # tell the queue that we are done with the task at hand
+                self.parent_queue.task_done()
 
-            # de-serialise the message into its original tuple
-            comm_from_script = json.loads(raw_comm_from_script)
+                # de-serialise the message into its original tuple
+                comm_from_script = json.loads(raw_comm_from_script)
 
-            log(comm_from_script, 'comm_from_script')
+                log(comm_from_script, 'comm_from_script')
 
-            # process the information from the child scripts
-            if comm_from_script:
-                # retrieve the relevant method
-                method = self.action_dict.get(comm_from_script[0], None)
-                if method:
-                    # call the appropriate method with the data
-                    method(**comm_from_script[1])
+                # process the information from the child scripts
+                if comm_from_script:
+                    # retrieve the relevant method
+                    method = self.action_dict.get(comm_from_script[0], None)
+                    if method:
+                        # call the appropriate method with the data
+                        method(**comm_from_script[1])
 
-                else:
-                    log(comm_from_script, 'instruction has no assigned method')
+                    else:
+                        log(comm_from_script, 'instruction has no assigned method')
 
-        except Queue.Empty:
-            # the only exception that should be handled is when the queue is empty
-            pass
+            except Queue.Empty:
+                return
 
     def check_update_conditions(self, connection_only=False):
         """
@@ -1346,28 +1368,33 @@ class Main(object):
             Daily checker of free space on /. Notifies user in Home window when there is
             less than 50mb remaining.
         """
-        if self.freespace_supressor > 172800:
-            self.freespace_supressor = 0
+        now = time.time()
+        if now < self.freespace_first_check_after:
+            return
+        if self.last_freespace_check and now - self.last_freespace_check < self.freespace_interval:
+            return
 
-            freespace, value = self.check_target_location_for_size(location='/', requirement=250)
-            if not freespace:
-                if 'Home.xml' in xbmc.getInfoLabel('Window.Property(xmlfile)'):
-                    if self.freespace_remedy == 'apt':
-                        # THIS SECTION IS CURRENTLY DISABLED
-                        # TO ENABLE IT CHANGE THE INIT FREESPACE_REMEDY TO 'apt'
-                        resp = DIALOG.yesno(self.lang(32136),
-                                            '[CR]'.join([self.lang(32142) % int(value),
-                                                         self.lang(32143)]))
+        self.last_freespace_check = now
 
-                        if resp:
-                            subprocess.Popen(['sudo', 'apt-get', 'autoremove', '&&',
-                                              'apt-get', 'clean'])
+        freespace, value = self.check_target_location_for_size(location='/', requirement=250)
+        if not freespace:
+            if 'Home.xml' in xbmc.getInfoLabel('Window.Property(xmlfile)'):
+                if self.freespace_remedy == 'apt':
+                    # THIS SECTION IS CURRENTLY DISABLED
+                    # TO ENABLE IT CHANGE THE INIT FREESPACE_REMEDY TO 'apt'
+                    resp = DIALOG.yesno(self.lang(32136),
+                                        '[CR]'.join([self.lang(32142) % int(value),
+                                                     self.lang(32143)]))
 
-                            self.freespace_remedy = 'reboot'
-                            # wait 10 minutes before next space check
-                            self.freespace_supressor = 171600
+                    if resp:
+                        subprocess.Popen(['sudo', 'sh', '-c',
+                                          'apt-get autoremove && apt-get clean'])
 
-                    else:
-                        _ = DIALOG.ok(self.lang(32136),
-                                      '[CR]'.join([self.lang(32142) % int(value),
-                                                   self.lang(32144)]))
+                        self.freespace_remedy = 'reboot'
+                        # wait 10 minutes before next space check
+                        self.last_freespace_check = now - self.freespace_interval + 600
+
+                else:
+                    _ = DIALOG.ok(self.lang(32136),
+                                  '[CR]'.join([self.lang(32142) % int(value),
+                                               self.lang(32144)]))
