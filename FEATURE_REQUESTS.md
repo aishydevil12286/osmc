@@ -2,6 +2,9 @@
 
 Tracked here instead of GitHub Issues, which are disabled on this fork.
 
+See also: [`docs/ARCHITECTURE_REWRITE.md`](docs/ARCHITECTURE_REWRITE.md) — proposal
+for a Go rewrite behind a privilege boundary, plus RetroArch integration.
+
 ---
 
 ## Add a real unit-test layer for the Python addon codebase
