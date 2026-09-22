@@ -218,12 +218,29 @@ class TestReadersMigrated(unittest.TestCase):
                       'legacy location must stay until the compat window closes')
 
     def test_reboot_checks_use_the_shared_list(self):
+        """ Every reboot check must resolve through REBOOT_REQUIRED_FILES.
+
+            This does not care how many call sites there are or whether they
+            inline the lookup - only that none of them hardcodes a path of
+            its own, which is how the pre-migration code missed
+            /run/osmc/reboot-needed.
+        """
         text = UPDATES_SERVICE_ENTRY.read_text()
-        # Two call sites previously inlined their own path lists.
-        self.assertEqual(
-            text.count('os.path.isfile(x) for x in REBOOT_REQUIRED_FILES'), 2,
-            'both reboot checks should read the shared list'
-        )
+
+        # the shared list is the only place a flag path may be spelled out
+        body = re.sub(r'REBOOT_REQUIRED_FILES = \[.*?\]', '', text, flags=re.S)
+        for path in ('/run/osmc/reboot-needed', '/tmp/reboot-needed',
+                     '/var/run/reboot-required'):
+            self.assertNotIn(path, body,
+                             '%s is hardcoded outside REBOOT_REQUIRED_FILES' % path)
+
+        # ...and something actually reads it
+        self.assertIn('os.path.isfile(x) for x in REBOOT_REQUIRED_FILES', text,
+                      'nothing reads REBOOT_REQUIRED_FILES')
+
+        # every check goes through the one helper
+        self.assertGreaterEqual(text.count('self.check_if_reboot_required()'), 2,
+                                'both reboot checks should go through the helper')
 
     def test_dead_reboot_check_typo_is_gone(self):
         """One call site checked a relative path, 'fname/var/run/...', so
