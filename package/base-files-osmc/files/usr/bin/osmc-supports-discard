@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+# Reports whether a filesystem lives on a device that supports discard.
+#
+# Exits 0 when it does, non-zero when it does not, cannot be determined, or
+# does not apply. Prints one line either way.
+#
+# Used as an ExecCondition= for fstrim.service, so that a weekly TRIM is
+# skipped cleanly on hardware that cannot do it rather than failing every
+# week. Plenty of SD cards do not expose erase to the host, and eMMC
+# generally does, but neither can be told from the card's model name.
+#
+# Checked at run time rather than at install time on purpose: the card can
+# be swapped, or root moved to USB, long after the package was configured.
+#
+# Also useful by hand:
+#     osmc-supports-discard          # the root filesystem
+#     osmc-supports-discard /mnt     # somewhere else
+
+set -u
+
+# OSMC_SYSFS_BLOCK exists so the test suite can exercise both answers
+# without needing hardware that gives each one. It grants nothing: reading
+# a different directory is something the caller could already do.
+SYSFS_BLOCK="${OSMC_SYSFS_BLOCK:-/sys/class/block}"
+
+TARGET="${1:-/}"
+
+SOURCE=$(findmnt -n -o SOURCE --target "$TARGET" 2>/dev/null)
+if [ -z "$SOURCE" ]; then
+	echo "$TARGET: cannot determine the backing device"
+	exit 1
+fi
+
+# btrfs and friends report a subvolume suffix, e.g. /dev/sda1[/@]
+SOURCE="${SOURCE%%[*}"
+
+case "$SOURCE" in
+	/dev/*) ;;
+	*)
+		# Network and virtual filesystems have nothing to trim.
+		echo "$TARGET: on $SOURCE, which is not a block device"
+		exit 1
+		;;
+esac
+
+NAME=$(basename "$SOURCE")
+
+# A partition carries no queue/ of its own; the parent block device does,
+# and ".." from the partition's sysfs entry resolves to it. Whole-disk
+# devices match the first path.
+for queue in "$SYSFS_BLOCK/$NAME/queue/discard_max_bytes" \
+             "$SYSFS_BLOCK/$NAME/../queue/discard_max_bytes"; do
+	[ -r "$queue" ] || continue
+
+	read -r value < "$queue" || continue
+
+	case "$value" in
+		''|*[!0-9]*) continue ;;
+	esac
+
+	if [ "$value" -gt 0 ]; then
+		echo "$TARGET: $SOURCE supports discard (max $value bytes)"
+		exit 0
+	fi
+
+	echo "$TARGET: $SOURCE does not support discard"
+	exit 1
+done
+
+echo "$TARGET: no discard information for $SOURCE"
+exit 1
