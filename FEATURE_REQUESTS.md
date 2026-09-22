@@ -164,3 +164,103 @@ Not yet scoped in detail; noted here for later triage.
   `service_entry.py`, `apf_store.py`) use the same lower-risk-today but
   injection-prone pattern; standardizing on `subprocess.call([...])`
   repo-wide closes off this whole class of future bugs.
+
+---
+
+## Parked: mount the root filesystem noatime
+
+**Status:** Complete and tested; parked pending a hardware boot test
+**Branch:** `perf/pi-sd-noatime`
+**Was:** #11 (closed, not abandoned - reopen or re-propose from the branch)
+
+Parked rather than merged because it is boot-critical: it changes how the
+root filesystem is mounted, and a mistake means devices do not boot. It is
+verified by simulation and by a real ext4 mount, but not on target
+hardware.
+
+### To unpark
+
+Boot-test the branch on:
+
+- [ ] a Raspberry Pi (rbp2 or rbp4)
+- [ ] an NFS install, if one is available - that is the path the change is
+      specifically designed *not* to affect
+
+Vero is out of scope for this fork, so no Vero testing is required, though
+the change does apply there too.
+
+### The gap
+
+Root lives on SD or eMMC on every platform OSMC ships. The initramfs owns
+that mount and was making it with no options beyond `rw`, which leaves the
+kernel default of `relatime` in place.
+
+Under relatime, any file read whose access time is over a day old has an
+atime written back - so a Kodi library scan turns thousands of reads into
+thousands of small metadata writes. That is the worst case for flash: poor
+small-write performance and a limited erase budget. Nothing on an OSMC
+system reads atime.
+
+### Why it looks accidental rather than deliberate
+
+Every other path already gets `noatime`:
+
+| Path | Gets `noatime`? |
+|---|---|
+| `/boot` (fstab) | yes |
+| Apple TV root (fstab) | yes |
+| NFS root (fstab) | yes |
+| Installer's own environment | yes |
+| **Local root on Pi** | **no** |
+
+The installer writes `defaults,noatime` for root into `/etc/fstab`, but
+outside the Apple TV that entry is commented out, because the initramfs
+does the mount:
+
+```
+# rootfs is not mounted in fstab as we do it via initramfs. Uncomment for remount (slower boot)
+```
+
+Setting it from `cmdline.txt` was not an option either - `rootflags`
+appears nowhere in the tree, and the initramfs parses `root=`,
+`rootfstype=`, `rootdelay=` and `nfsroot=` but never `rootflags=`.
+
+### The change
+
+One line in `package/kernel-osmc/initramfs-src/init`, following the
+convention the file already documents ("Each concatenated mount option
+should have a leading comma"), so the default concatenates onto `rw` and
+yields `rw,noatime`.
+
+Because it is the initramfs default rather than an install-time setting,
+**existing installations pick it up on their next kernel update**, not just
+new ones.
+
+NFS roots are deliberately untouched: the `nfsroot=` handler assigns
+`OPTION_MOUNT_OPTIONS` outright, so those keep exactly the options the user
+asked for.
+
+### Test coverage
+
+`tests/test_initramfs_mount_options.py` - 9 tests. It lifts the three real
+option-building lines out of the init script and executes them under
+`/bin/sh`, so it fails if that logic is edited without updating the test:
+
+- local root comes out `-o rw,noatime`
+- `rw` was not displaced
+- NFS unchanged (`-o vers=3,nolock`)
+- even the old empty default still produces a well-formed string, never a
+  bare `-o`
+- `sh -n` on the real init; the expected lines are still where the test
+  thinks they are
+- one test builds a loopback ext4 image, mounts it with the exact option
+  string, and confirms via `/proc/mounts` that `noatime` is in effect
+
+Against the old init the decisive assertion reads:
+
+```
+AssertionError: '-o rw' != '-o rw,noatime'
+```
+
+Only 2 of 9 fail pre-fix - the other 7 are structural guards that
+correctly hold either way.
