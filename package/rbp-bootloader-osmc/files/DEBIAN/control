@@ -1,6 +1,6 @@
 Origin: OSMC
 Package: rbp-bootloader-osmc
-Version: 6.1.39-1
+Version: 6.1.39-1+rocksolid1
 Section: kernel
 Essential: No
 Priority: Required

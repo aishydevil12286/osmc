@@ -1,6 +1,6 @@
 Origin: OSMC
 Package: mediacenter-addon-osmc
-Version: 3.0.789
+Version: 3.0.789+rocksolid1
 Section: utils
 Essential: No
 Priority: optional
