@@ -24,7 +24,7 @@ fi
 }
 
 . ../common.sh
-test $1 == rbp2 && VERSION="5.15.92" && REV="1" && FLAGS_INITRAMFS=$(($INITRAMFS_BUILD + $INITRAMFS_EMBED)) && IMG_TYPE="zImage" && SIGN_KERNEL=0
+test $1 == rbp2 && VERSION="6.12.110" && REV="1" && FLAGS_INITRAMFS=$(($INITRAMFS_BUILD + $INITRAMFS_EMBED)) && IMG_TYPE="zImage" && SIGN_KERNEL=0
 test $1 == rbp464 && VERSION="5.15.92" && REV="1" && FLAGS_INITRAMFS=$(($INITRAMFS_BUILD + $INITRAMFS_EMBED)) && IMG_TYPE="zImage" && SIGN_KERNEL=0
 test $1 == vero364 && VERSION="4.9.269" && REV="62" && FLAGS_INITRAMFS=$(($INITRAMFS_BUILD)) && IMG_TYPE="zImage" && SIGN_KERNEL=0
 test $1 == vero564 && VERSION="4.9.269" && REV="103" && FLAGS_INITRAMFS=$(($INITRAMFS_BUILD)) && IMG_TYPE="zImage" && SIGN_KERNEL=1
@@ -40,6 +40,12 @@ then
 	fi
 	SOURCE_LINUX="https://www.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${DL_VERSION}.tar.xz"
 fi
+# The Raspberry Pi Foundation stopped maintaining rpi-5.15.y at 5.15.92,
+# which is exactly where this was pinned - rbp-012-add-rbp-support.patch is
+# that branch squashed into one diff. Source rpi-6.12.y directly instead, so
+# the Pi delta stays maintained upstream rather than carried here.
+# TODO: pin a stable_YYYYMMDD tag rather than the branch head before merging.
+if [ $1 == "rbp2" ]; then SOURCE_LINUX="https://github.com/raspberrypi/linux/archive/refs/heads/rpi-6.12.y.tar.gz"; fi
 if [ $1 == "vero364" ]; then SOURCE_LINUX="https://github.com/osmc/vero3-linux/archive/osmc-openlinux-4.9.tar.gz"; fi
 if [ $1 == "vero564" ]; then SOURCE_LINUX="https://github.com/osmc/vero3-linux/archive/osmc-openlinux-4.9.tar.gz"; fi
 pull_source "${SOURCE_LINUX}" "$(pwd)/src"
