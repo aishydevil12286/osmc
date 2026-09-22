@@ -159,6 +159,14 @@ Not yet scoped in detail; noted here for later triage.
   mechanism found for the Kodi process; a systemd `Restart=on-failure` +
   backoff would improve stability on HDMI/driver crashes without a manual
   power cycle.
+- **`hide_controls()` is a no-op on Python 3** — `networking_gui.py`'s
+  `hide_controls()` is written as a bare `map(lambda x: ..., control_ids)`
+  whose result is never consumed, so on Python 3 the lambda never runs and
+  no control is ever hidden. Every `hide_controls(...)` call site in the
+  networking panels is therefore dead. The one-line fix is trivial, but it
+  would make controls that have silently stayed visible for years start
+  disappearing, so it needs a pass over each call site (and ideally a look
+  at the panels on real hardware) rather than a blind change.
 - **`os.system`/`os.popen` → `subprocess` sweep** — beyond the one fixed
   in #3, ~10 other call sites (`osmc_walkthru.py`, `osmc_hotfix.py`,
   `service_entry.py`, `apf_store.py`) use the same lower-risk-today but

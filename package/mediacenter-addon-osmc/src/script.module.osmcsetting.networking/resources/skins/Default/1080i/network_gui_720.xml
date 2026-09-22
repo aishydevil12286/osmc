@@ -633,6 +633,28 @@
 					<texturefocus></texturefocus>
 					<texturenofocus></texturenofocus>
 					<onup>10217</onup>
+					<ondown>10222</ondown>
+					<onright>5000</onright>
+					<onleft>102</onleft>
+				</control>
+				
+				<!-- Scan for networks -->
+				<control id="10222" type="button">
+					<visible>Control.IsEnabled(10222)</visible>
+					<description>Scan for wireless networks</description>
+					<label>$ADDON[script.module.osmcsetting.networking 32107]</label>
+					<top>140</top>
+					<width>630</width>
+					<height>66</height>
+					<align>left</align>
+					<aligny>center</aligny>
+					<font>osmc_addon_720_Med</font>
+					<textcolor>66ffffff</textcolor>
+					<focusedcolor>ffe0b074</focusedcolor>
+					<shadowcolor>44000000</shadowcolor>
+					<texturefocus></texturefocus>
+					<texturenofocus></texturenofocus>
+					<onup>10211</onup>
 					<ondown>10212</ondown>
 					<onright>5000</onright>
 					<onleft>102</onleft>
@@ -654,7 +676,7 @@
 					<shadowcolor>44000000</shadowcolor>
 					<texturefocus></texturefocus>
 					<texturenofocus></texturenofocus>
-					<onup>10211</onup>
+					<onup>10222</onup>
 					<ondown>10213</ondown>
 					<onright>5000</onright>
 					<onleft>102</onleft>

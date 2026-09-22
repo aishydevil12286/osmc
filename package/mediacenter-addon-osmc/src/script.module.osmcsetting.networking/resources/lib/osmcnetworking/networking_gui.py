@@ -13,6 +13,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 import traceback
 from io import open
 
@@ -130,6 +131,13 @@ BLUETOOTH_CONTROLS = [10303, 6000, 7000]
 BLUETOOTH_DISCOVERY = 10303
 BLUETOOTH_ENABLE_TOGGLE = 10301
 
+# How long Bluetooth discovery is allowed to run before it stops itself.
+# Inquiry mode keeps the radio busy; on the combo WiFi/BT chips used by the
+# Pi 3 and Pi 4 that costs WiFi throughput and makes already-connected BT
+# audio and input devices stutter. Anything the user is pairing announces
+# itself well inside this window.
+BLUETOOTH_DISCOVERY_TIMEOUT = 90
+
 ALL_WIRED_CONTROLS = [10111, 10112, 10113, 10114, 10115, 10116, 10118, 10119, 910112, 910113,
                       910114, 910115, 910116]
 WIRED_STATUS_LABEL = 81000
@@ -142,7 +150,7 @@ WIRED_ADAPTER_TOGGLE = 10120
 WIRED_WAIT_FOR_NETWORK = 10121
 
 ALL_WIRELESS_CONTROLS = [5000, 910212, 910213, 910214, 910215, 910216, 10211, 10212, 10213,
-                         10214, 10215, 10216, 10218, 10219]
+                         10214, 10215, 10216, 10218, 10219, 10222]
 
 WIRELESS_STATUS_LABEL = 82000
 WIRELESS_IP_VALUES = [910212, 910213, 910214, 910215, 910216]
@@ -153,6 +161,7 @@ WIRELESS_RESET_BUTTON = 10219
 WIRELESS_DHCP_MANUAL_BUTTON = 10211
 WIRELESS_NETWORKS = 5000
 WIRELESS_WAIT_FOR_NETWORK = 10221
+WIRELESS_SCAN_BUTTON = 10222
 
 ALL_TETHERING_CONTROLS = [10401, 910401, 10402, 910402, 10403, 10404, 10405, 10406, 10407]
 TETHERING_WIFI_SSID_LABEL = 10401
@@ -237,6 +246,7 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
         self.discovered_bluetooths = []
 
         self.bluetooth_discovering = False
+        self.bluetooth_discovery_started = 0
 
         # flag to identify when a MySQL setting has been changed
         self.mysql_changed = False
@@ -349,7 +359,7 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
             self.populate_wired_panel()
 
         if panel_to_show == SELECTOR_WIRELESS_NETWORK:
-            self.populate_wifi_panel(False)
+            self.populate_wifi_panel(True)
 
         if self.use_preseed and not osmc_network.get_nfs_ip_cmdline_value():
             self.setup_networking_from_preseed()
@@ -517,7 +527,9 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
                 if focused_control == SELECTOR_WIRED_NETWORK:
                     self.populate_wired_panel()
                 elif focused_control == SELECTOR_WIRELESS_NETWORK:
-                    self.populate_wifi_panel()
+                    # a single scan on entry, so the list isn't empty while
+                    # connman's background scan catches up
+                    self.populate_wifi_panel(True)
                 elif focused_control == SELECTOR_BLUETOOTH:
                     self.populate_bluetooth_panel()
                 elif focused_control == SELECTOR_TETHERING:
@@ -571,6 +583,48 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
         except:
             pass
 
+    def start_bluetooth_discovery(self):
+        """ Turn the radio's inquiry mode on and start the clock on it. """
+        self.osmc_bluetooth.start_discovery()
+        self.bluetooth_discovering = True
+        self.bluetooth_discovery_started = time.time()
+        self._set_discovery_radio_button(True)
+
+    def stop_bluetooth_discovery(self):
+        self.bluetooth_discovering = False
+        self.bluetooth_discovery_started = 0
+        try:
+            self.osmc_bluetooth.stop_discovery()
+        except:
+            pass
+        self._set_discovery_radio_button(False)
+
+    def expire_bluetooth_discovery(self):
+        """ Stop discovery once BLUETOOTH_DISCOVERY_TIMEOUT has passed.
+
+            Discovery was correctly on-demand already - the user toggles it,
+            and leaving the panel stops it - but nothing stopped it if the
+            user simply walked away with the panel open. BlueZ then holds the
+            adapter in inquiry mode indefinitely, which on the Pi 3 and Pi 4
+            shares silicon and antenna with WiFi.
+        """
+        if not self.bluetooth_discovering or not self.bluetooth_discovery_started:
+            return False
+
+        if time.time() - self.bluetooth_discovery_started < BLUETOOTH_DISCOVERY_TIMEOUT:
+            return False
+
+        log('Bluetooth discovery timed out after %s seconds' % BLUETOOTH_DISCOVERY_TIMEOUT)
+        self.stop_bluetooth_discovery()
+        return True
+
+    def _set_discovery_radio_button(self, selected):
+        try:
+            self.getControl(BLUETOOTH_DISCOVERY).setSelected(selected)
+        except:
+            # the control is gone if the panel has already been torn down
+            pass
+
     def stop_bluetooth_population_thread(self):
         if self.is_thread_running(BLUETOOTH_THREAD_NAME):
             try:
@@ -579,11 +633,7 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
                 pass
         # also make sure we have turned discovery off
         if self.bluetooth_discovering:
-            self.bluetooth_discovering = not self.bluetooth_discovering
-            try:
-                self.osmc_bluetooth.stop_discovery()
-            except:
-                pass
+            self.stop_bluetooth_discovery()
 
     @staticmethod
     def show_busy_dialogue():
@@ -1165,7 +1215,8 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
 
                     self.toggle_controls(True, [WIRELESS_ADAPTER_TOGGLE,
                                                 WIRELESS_NETWORKS,
-                                                WIRELESS_DHCP_MANUAL_BUTTON
+                                                WIRELESS_DHCP_MANUAL_BUTTON,
+                                                WIRELESS_SCAN_BUTTON
                                                 ])
 
                     if osmc_network.has_network_connection(True):
@@ -1183,7 +1234,8 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
                                        [WIRELESS_DHCP_MANUAL_BUTTON,
                                         WIRELESS_APPLY_BUTTON, WIRELESS_RESET_BUTTON])
 
-                    self.toggle_controls(True, [WIRELESS_ADAPTER_TOGGLE, WIRELESS_NETWORKS])
+                    self.toggle_controls(True, [WIRELESS_ADAPTER_TOGGLE, WIRELESS_NETWORKS,
+                                                WIRELESS_SCAN_BUTTON])
 
                     self.clear_ip_controls(WIRELESS_IP_VALUES)
 
@@ -1251,11 +1303,29 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
                 self.populate_wifi_panel()
                 self.setFocusId(WIRELESS_DHCP_MANUAL_BUTTON)
 
+        elif control_id == WIRELESS_SCAN_BUTTON:
+            self.rescan_wifi()
+
         elif control_id == WIRELESS_ADAPTER_TOGGLE:
             self.toggle_wifi()
-            self.populate_wifi_panel()
+            self.populate_wifi_panel(True)
 
         self.update_apply_reset_button('WIRELESS')
+
+    def rescan_wifi(self):
+        """ Explicit, user-driven rescan.
+
+            This replaces the timer that used to fire a scan every 6 seconds
+            for as long as the panel was open. The list itself is refreshed
+            from connman's cache on its own schedule and does not need a scan
+            to stay current; this is here for the one case that did need the
+            old timer - "my network isn't in the list yet".
+        """
+        try:
+            self.wifi_populate_bot.request_scan()
+        except AttributeError:
+            # no population thread, e.g. the adapter is off - nothing to scan
+            pass
 
     def toggle_wifi(self):
         self.show_busy_dialogue()
@@ -1471,7 +1541,8 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
         # Start Bluetooth Population Thread
         if not self.is_thread_running(BLUETOOTH_THREAD_NAME):
             self.bluetooth_population_thread = \
-                BluetoothPopulationThread(self.BTD, self.BTP, self.addon)
+                BluetoothPopulationThread(self.BTD, self.BTP, self.addon,
+                                          discovery_expiry_check=self.expire_bluetooth_discovery)
 
             self.bluetooth_population_thread.daemon = True
             self.bluetooth_population_thread.start()
@@ -1496,13 +1567,19 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
 
             try:
                 if self.osmc_bluetooth.is_bluetooth_active():
-                    self.bluetooth_discovering = not self.bluetooth_discovering
-                    if self.bluetooth_discovering:
-                        self.osmc_bluetooth.start_discovery()
+                    if not self.bluetooth_discovering:
+                        self.start_bluetooth_discovery()
                     else:
-                        self.osmc_bluetooth.stop_discovery()
+                        self.stop_bluetooth_discovery()
             except:
-                pass
+                log(traceback.format_exc())
+
+            # Kodi has already flipped the radio button's visual state by the
+            # time this handler runs, so re-assert it from the state we
+            # actually reached - otherwise a Bluetooth adapter that is off, or
+            # a start_discovery() that raised, leaves the button claiming
+            # discovery is running.
+            self._set_discovery_radio_button(self.bluetooth_discovering)
 
             self.clear_busy_dialogue()
 
@@ -1852,11 +1929,22 @@ class NetworkingGui(xbmcgui.WindowXMLDialog):
 
 class BluetoothPopulationThread(threading.Thread):
 
-    def __init__(self, discovered_list_control, trusted_list_control, addon=None):
+    # How often the displayed device lists are refreshed.
+    REFRESH_INTERVAL = 2000
+
+    # See WIFIPopulateBot.TICK - same 10ms-to-200ms reasoning.
+    TICK = 200
+
+    def __init__(self, discovered_list_control, trusted_list_control, addon=None,
+                 discovery_expiry_check=None):
         super(BluetoothPopulationThread, self).__init__(name=BLUETOOTH_THREAD_NAME)
 
         self._addon = addon
         self._osmc_bluetooth = None
+
+        # called on each refresh so discovery can time itself out even when
+        # the user has walked away and no GUI action is firing
+        self.discovery_expiry_check = discovery_expiry_check
 
         self.exit = False
 
@@ -1879,21 +1967,20 @@ class BluetoothPopulationThread(threading.Thread):
         return self._osmc_bluetooth
 
     def run(self):
-        runs = 0
+        elapsed = 0
         while not self.exit:
             # update gui every 2 seconds
-            if runs % 200 == 0 and not self.exit:
+            if elapsed % self.REFRESH_INTERVAL == 0 and not self.exit:
                 self.update_bluetooth_lists()
 
-            # every 4 seconds output debug info
-            if runs % 400 == 0 and not self.exit:
-                log('-- DISCOVERED ---')
-                log(self.discovered_dict)
-                log('-- TRUSTED --')
-                log(self.trusted_dict)
+                if self.discovery_expiry_check:
+                    try:
+                        self.discovery_expiry_check()
+                    except:
+                        log(traceback.format_exc())
 
-            xbmc.sleep(10)
-            runs += 1
+            xbmc.sleep(self.TICK)
+            elapsed += self.TICK
 
     def update_bluetooth_lists(self):
         self.trusted_dict = self.populate_bluetooth_dict(True)
@@ -1963,6 +2050,17 @@ class BluetoothPopulationThread(threading.Thread):
         return item
 
     def populate_bluetooth_dict(self, paired):
+        """ Build the display dict for one of the two device lists.
+
+            list_trusted_devices()/list_discovered_devices() are backed by a
+            single GetManagedObjects() call that already returns every
+            property of every device. This used to throw that away and then
+            ask BlueZ again over D-Bus for Alias, Paired, Connected and
+            Trusted, one round trip each - 4 per device, for both lists, every
+            refresh. With a couple of remotes, a controller and whatever else
+            is in range that ran into dozens of round trips every two seconds
+            to re-fetch data already in hand.
+        """
         devices = {}
         bluetooth_dict = {}
         try:
@@ -1971,12 +2069,15 @@ class BluetoothPopulationThread(threading.Thread):
         except:
             pass
 
-        for address in devices.keys():
+        for address, properties in devices.items():
+            # coerce out of the dbus.String/dbus.Boolean types the managed
+            # object dict carries, so consumers see exactly what the
+            # per-property lookups used to hand back
             bluetooth_dict[address] = {
-                'alias': self.osmc_bluetooth.get_device_property(address, 'Alias'),
-                'paired': self.osmc_bluetooth.get_device_property(address, 'Paired'),
-                'connected': self.osmc_bluetooth.get_device_property(address, 'Connected'),
-                'trusted': self.osmc_bluetooth.get_device_property(address, 'Trusted'),
+                'alias': str(properties.get('Alias', '')),
+                'paired': bool(properties.get('Paired', False)),
+                'connected': bool(properties.get('Connected', False)),
+                'trusted': bool(properties.get('Trusted', False)),
             }
         return bluetooth_dict
 
@@ -2001,6 +2102,16 @@ class WIFIScannerBot(threading.Thread):
 
 class WIFIPopulateBot(threading.Thread):
 
+    # How often the displayed network list is refreshed from connman's cache.
+    REFRESH_INTERVAL = 2000
+
+    # How long the thread sleeps between checks of the exit flag. The old
+    # value was 10ms, which woke this thread 100 times a second for the whole
+    # time the panel was open purely so that closing it felt instant. 200ms
+    # is still imperceptible on exit and wakes the CPU 20 times less often -
+    # which matters on a Pi 2, where this competes with video decode.
+    TICK = 200
+
     def __init__(self, scan, wifi_list_control, conn_ssid):
         super(WIFIPopulateBot, self).__init__(name=WIFI_THREAD_NAME)
 
@@ -2009,22 +2120,47 @@ class WIFIPopulateBot(threading.Thread):
         self.conn_ssid = conn_ssid
         self.exit = False
         self.wifis = []
+        self.wifi_scanner_bot = None
 
         self.current_network_config = None
 
         if self.scan:
-            self.wifi_scanner_bot = WIFIScannerBot()
-            self.wifi_scanner_bot.daemon = True
-            self.wifi_scanner_bot.start()
+            self.request_scan()
+
+    def request_scan(self):
+        """ Kick off a single active scan.
+
+            connman keeps scanning in the background on its own (the
+            BackgroundScanning default is on, and OSMC does not disable it),
+            and the displayed list is built from manager.GetServices(), which
+            is connman's cached service list and is populated with or without
+            an explicit scan. So an active scan is only ever needed to shorten
+            the wait for a network that has not been seen yet - on entering
+            the panel, or when the user says their network is missing.
+
+            Previously this ran unconditionally every 600 ticks of a 10ms
+            loop - i.e. every 6 seconds, not the "every minute" the comment
+            claimed - for as long as the panel was open, whether or not the
+            box was already connected and whether or not it was even using
+            WiFi. Each of those scans hits the radio.
+        """
+        if self.exit:
+            return
+
+        # don't stack scans on top of one another
+        if self.wifi_scanner_bot is not None and self.wifi_scanner_bot.is_alive():
+            return
+
+        self.wifi_scanner_bot = WIFIScannerBot()
+        self.wifi_scanner_bot.daemon = True
+        self.wifi_scanner_bot.start()
 
     def run(self):
         running_dict = {}
-        runs = 0
+        elapsed = 0
 
         while not self.exit:
-            # only run the network check every 2 seconds, but allow the
-            # exit command to be checked every 10ms
-            if runs % 200 == 0 and not self.exit:
+            if elapsed % self.REFRESH_INTERVAL == 0 and not self.exit:
                 log('Updating Wifi networks')
                 wifis = osmc_network.get_wifi_networks()
 
@@ -2032,14 +2168,8 @@ class WIFIPopulateBot(threading.Thread):
 
                 self.update_list_control(running_dict, len(wifis.keys()) > 1)
 
-            # every minute re-scan wifi unless the thread has been asked to exit
-            if not self.exit and runs % 600 == 0:
-                self.wifi_scanner_bot = WIFIScannerBot()
-                self.wifi_scanner_bot.daemon = True
-                self.wifi_scanner_bot.start()
-
-            xbmc.sleep(10)
-            runs += 1
+            xbmc.sleep(self.TICK)
+            elapsed += self.TICK
 
     def stop_thread(self):
         self.exit = True

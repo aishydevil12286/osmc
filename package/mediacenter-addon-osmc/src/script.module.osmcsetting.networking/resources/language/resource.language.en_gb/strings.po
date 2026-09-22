@@ -435,3 +435,7 @@ msgstr ""
 msgctxt "#32106"
 msgid "Unhandled Exception caught - See log for details"
 msgstr ""
+
+msgctxt "#32107"
+msgid "Scan for networks"
+msgstr ""
