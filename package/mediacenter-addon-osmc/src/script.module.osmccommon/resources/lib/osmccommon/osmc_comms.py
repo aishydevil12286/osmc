@@ -53,7 +53,7 @@ class Communicator(threading.Thread):
         self.timeout = 3
         self.sock.settimeout(self.timeout)
         self.sock.bind(self.address)
-        self.sock.listen(1)
+        self.sock.listen(8)
 
         self.stopped = False
 
